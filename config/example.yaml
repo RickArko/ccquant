@@ -1,0 +1,19 @@
+database: data/ccquant.duckdb
+universe:
+  size: 100
+  include_symbols:
+    - BTC
+    - ETH
+    - SOL
+    - HYPE
+    - PAXG
+  source_preference: binance
+  request_delay_seconds: 0.25
+daily:
+  tail_days: 7
+hourly:
+  enabled: true
+  top: 10
+  history_days: 365
+  tail_hours: 168
+
