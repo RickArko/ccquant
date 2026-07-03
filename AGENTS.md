@@ -3,12 +3,17 @@
 ## Commands
 
 ```bash
-uv sync --extra dev                       # install dev tooling (mypy, pytest, ruff)
+uv sync --extra dev                       # install dev tooling (mypy, pytest, ruff, pre-commit)
+uv run pre-commit install                 # install git hook (run once after clone)
+uv run pre-commit run --all-files         # run all hooks manually
 uv run pytest                             # all tests
 uv run pytest tests/test_sources.py::test_fetch_binance_daily_parses_kline  # single test
 uv run ruff check .                       # lint (line-length 88; rules E,F,I,B,UP,ASYNC)
 uv run mypy src                           # typecheck — strict mode, MUST run on `src` not `.`
 ```
+
+`pre-commit` runs `ruff check --fix` -> `mypy src` -> `pytest -q` on every commit
+(hooks use `uv run` to reuse the project venv). Bypass with `git commit --no-verify`.
 
 Verify in order: `ruff check .` -> `mypy src` -> `pytest`.
 

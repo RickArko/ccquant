@@ -9,6 +9,7 @@ dependencies = [
   "httpx>=0.28.1",
   "polars>=1.30.0",
   "pyarrow>=24.0.0",
+  "python-dotenv>=1.0.0",
   "pyyaml>=6.0.2",
   "rich>=14.1.0",
   "typer>=0.16.1",
@@ -20,6 +21,7 @@ ccquant = "ccquant.cli:main"
 [project.optional-dependencies]
 dev = [
   "mypy>=1.15.0",
+  "pre-commit>=4.0.0",
   "pytest>=8.3.5",
   "pytest-asyncio>=0.25.0",
   "ruff>=0.12.12",
