@@ -1,5 +1,11 @@
 # Repository Guidelines
 
+## API Keys & Data Sources
+
+All external API keys are loaded from `.env` via `python-dotenv`. Copy
+`.env.example` to `.env` and fill in your keys. Full pricing tiers, free-tier
+limits, and key setup instructions are in [`documentation/API_Pricing.md`](documentation/API_Pricing.md).
+
 ## Commands
 
 ```bash
