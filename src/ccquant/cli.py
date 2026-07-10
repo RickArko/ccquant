@@ -78,6 +78,68 @@ def sync_backfill(
         console.print(f"  {symbol}: {count}")
 
 
+@sync_app.command("all")
+def sync_all(
+    config: str | None = typer.Option(None, "--config", "-c"),
+    size: int | None = typer.Option(None, "--size", help="Override universe size"),
+    hourly_top: int | None = typer.Option(
+        None, "--hourly-top", help="Limit hourly to top-N assets"
+    ),
+) -> None:
+    """Sync everything: universe + daily tail-refresh + hourly tail-refresh + status.
+
+    One command to bring the local DB up to today. Runs:
+    1. Universe refresh (top-cap rankings + exchange pair probes)
+    2. Daily backfill (tail-only — full backfill already complete)
+    3. Hourly backfill (tail-only for top-N assets)
+    4. Status table
+    """
+    store, cfg = _load(config)
+    syncer = MarketSync(store, cfg)
+
+    async def run() -> None:
+        try:
+            # 1. Universe
+            count = await syncer.update_universe(size=size)
+            console.print(f"[green]Universe updated: {count} assets[/green]")
+
+            # 2. Daily tail-refresh (full=True auto-falls
+            #    back to tail when backfill_complete)
+            console.print("\n[dim]Daily tail-refresh...[/dim]")
+            daily = await syncer.backfill(interval="1d", full=True)
+            console.print(f"[green]Daily: {sum(daily.values())} candles[/green]")
+
+            # 3. Hourly tail-refresh
+            top = hourly_top if hourly_top is not None else cfg.hourly.top
+            console.print(f"\n[dim]Hourly tail-refresh (top {top})...[/dim]")
+            hourly = await syncer.backfill(interval="1h", full=True, top=top)
+            console.print(f"[green]Hourly: {sum(hourly.values())} candles[/green]")
+        finally:
+            await syncer.close()
+
+    asyncio.run(run())
+
+    # 4. Status
+    console.print()
+    table = Table(title="ccquant data status")
+    for col in [
+        "symbol", "rank", "daily rows", "daily range",
+        "hourly rows", "hourly range",
+    ]:
+        table.add_column(col)
+    for row in store.status_rows():
+        table.add_row(
+            str(row["symbol"]),
+            str(row["rank"]),
+            str(row["daily_rows"]),
+            f"{row['daily_from'] or '-'} -> {row['daily_to'] or '-'}",
+            str(row["hourly_rows"]),
+            f"{row['hourly_from'] or '-'} -> {row['hourly_to'] or '-'}",
+        )
+    console.print(table)
+    store.close()
+
+
 @app.command("status")
 def status(config: str | None = typer.Option(None, "--config", "-c")) -> None:
     """Show stored row counts and date ranges."""

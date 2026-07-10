@@ -26,12 +26,19 @@ Verify in order: `ruff check .` -> `mypy src` -> `pytest`.
 CLI entry point is `ccquant` (`ccquant.cli:main`), a Typer app with subcommands:
 
 ```bash
+uv run ccquant sync all                    # one-command update: universe + daily + hourly + status
 uv run ccquant sync universe [--size N] [--config FILE]   # fetch top-cap universe + probe exchange pairs
 uv run ccquant sync backfill --interval {1d|1h} [--top N] [--full|--tail] [--config FILE]
 uv run ccquant status
 uv run ccquant export parquet --out data/export
 uv run ccquant export csv --out data/export
 ```
+
+`sync all` is the fastest way to bring the DB up to today — it runs universe
+refresh, then tail-refreshes daily and hourly (only fetching recent candles,
+not re-pulling full history). Use it for routine updates.
+
+`sync universe` marks all previously active assets inactive before inserting the new set.
 
 ## Runtime & Config
 
@@ -42,7 +49,6 @@ uv run ccquant export csv --out data/export
 - `backfill --full` (default) only does a full historical pull when
   `sync_state.backfill_complete` is false; once complete it falls back to tail-refresh.
   Use `--tail` to force a short refresh.
-- `sync universe` marks all previously active assets inactive before inserting the new set.
 
 ## Architecture
 

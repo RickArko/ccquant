@@ -10,6 +10,7 @@ statistical, ML, and foundation-model experiments.
 
 ```bash
 uv sync --extra dev
+uv run ccquant sync all                     # one-command update: universe + daily + hourly + status
 uv run ccquant sync universe --size 100
 uv run ccquant sync backfill --interval 1d
 uv run ccquant sync backfill --interval 1h --top 10
