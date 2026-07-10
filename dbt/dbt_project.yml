@@ -1,0 +1,35 @@
+name: ccquant
+version: "1.0.0"
+config-version: 2
+
+profile: ccquant
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+snapshot-paths: ["snapshots"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  ccquant:
+    staging:
+      +materialized: view
+      +schema: staging
+    marts:
+      +materialized: table
+      +schema: marts
+    signals:
+      +materialized: table
+      +schema: signals
+    events:
+      +materialized: table
+      +schema: events
+
+seeds:
+  ccquant:
+    +schema: events

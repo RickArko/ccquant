@@ -21,7 +21,7 @@ uv run mypy src                           # typecheck — strict mode, MUST run 
 `pre-commit` runs `ruff check --fix` -> `mypy src` -> `pytest -q` on every commit
 (hooks use `uv run` to reuse the project venv). Bypass with `git commit --no-verify`.
 
-Verify in order: `ruff check .` -> `mypy src` -> `pytest`.
+Verify in order: `ruff check .` -> `mypy src` -> `pytest` -> `dbt build && dbt test` (dbt requires `--extra dbt`).
 
 CLI entry point is `ccquant` (`ccquant.cli:main`), a Typer app with subcommands:
 
@@ -29,14 +29,31 @@ CLI entry point is `ccquant` (`ccquant.cli:main`), a Typer app with subcommands:
 uv run ccquant sync all                    # one-command update: universe + daily + hourly + status
 uv run ccquant sync universe [--size N] [--config FILE]   # fetch top-cap universe + probe exchange pairs
 uv run ccquant sync backfill --interval {1d|1h} [--top N] [--full|--tail] [--config FILE]
+uv run ccquant sync oi [--interval {1d|1h}] [--top N] [--full|--tail]   # open interest (Binance+Bybit+OKX)
+uv run ccquant sync macro                  # FRED macro series
+uv run ccquant migrate onchain [--source FILE]  # migrate onchain.duckdb into main DB
+uv run ccquant db backup [--dest DIR] [--keep N]  # timestamped file-copy backup
 uv run ccquant status
 uv run ccquant export parquet --out data/export
 uv run ccquant export csv --out data/export
 ```
 
+### dbt commands
+
+```bash
+uv sync --extra dbt                        # install dbt-core + dbt-duckdb
+uv run dbt deps --project-dir dbt --profiles-dir dbt          # install dbt packages (dbt_utils)
+uv run dbt seed --project-dir dbt --profiles-dir dbt          # load seeds/events.csv
+uv run dbt build --project-dir dbt --profiles-dir dbt         # build all models + run all tests
+uv run dbt test --project-dir dbt --profiles-dir dbt          # run tests only
+uv run dbt snapshot --project-dir dbt --profiles-dir dbt      # run SCD2 snapshots
+```
+
 `sync all` is the fastest way to bring the DB up to today — it runs universe
 refresh, then tail-refreshes daily and hourly (only fetching recent candles,
-not re-pulling full history). Use it for routine updates.
+not re-pulling full history), then OI + macro, then `dbt build` to rebuild
+marts/signals/events. Use it for routine updates. Use `--no-dbt` to skip the
+dbt step (e.g. when dbt isn't installed).
 
 `sync universe` marks all previously active assets inactive before inserting the new set.
 
@@ -59,9 +76,18 @@ not re-pulling full history). Use it for routine updates.
 - Source preference is Binance -> Coinbase -> CoinGecko fallback, gated by
   `universe.source_preference`. **Hourly has no CoinGecko fallback** (daily only); a
   symbol with neither Binance pair nor Coinbase product yields zero hourly candles.
-- DuckDB tables: `assets`, `ohlcv_daily`, `ohlcv_hourly`, `sync_state`. Schema is created
-  idempotently on `MarketStore` init. `sync_state.earliest_at`/`latest_at` are stored as
-  ISO varchar.
+- DuckDB tables: `assets`, `ohlcv_daily`, `ohlcv_hourly`, `sync_state`,
+  `onchain_series`, `onchain_sync_state`, `open_interest`, `macro_series`,
+  `macro_sync_state`. Schema is created idempotently on `MarketStore` init.
+  `sync_state.earliest_at`/`latest_at` are stored as ISO varchar.
+- dbt transformation layer lives in `dbt/`. Python owns `main` schema (raw);
+  dbt owns `main_staging` (views), `main_marts` (tables), `main_signals`
+  (tables), `main_events` (tables). dbt never writes to `main`.
+- dbt profiles use `{{ env_var('CCQUANT_DB', 'data/ccquant.duckdb') }}` so the
+  same DB path as the Python layer is used. Run dbt commands with
+  `--project-dir dbt --profiles-dir dbt`.
+- Open interest has per-exchange config toggles (`open_interest.binance/bybit/okx`).
+  Disable any exchange in config without breaking the aggregate mart.
 - Optional extras: `uv sync --extra forecast` (numpy/pandas/scikit-learn/statsmodels) and
   `--extra notebook` (jupyterlab/plotly). `forecasting.py` itself uses only core deps
   (duckdb, polars) and is always importable; the heavier modeling libs are for future

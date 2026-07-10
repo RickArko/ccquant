@@ -1,0 +1,32 @@
+name: dbt build & test
+
+on:
+  pull_request:
+    paths:
+      - "dbt/**"
+      - "config/**"
+      - ".github/workflows/dbt.yml"
+  workflow_dispatch:
+
+jobs:
+  dbt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev --extra dbt
+
+      - name: Install dbt packages
+        run: uv run dbt deps --project-dir dbt --profiles-dir dbt
+
+      - name: Build dbt models
+        run: uv run dbt build --project-dir dbt --profiles-dir dbt
+        env:
+          CCQUANT_DB: data/ccquant.duckdb

@@ -1,0 +1,7 @@
+ccquant:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('CCQUANT_DB', 'data/ccquant.duckdb') }}"
+      threads: 4

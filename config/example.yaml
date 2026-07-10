@@ -16,4 +16,24 @@ hourly:
   top: 10
   history_days: 365
   tail_hours: 168
+open_interest:
+  enabled: true
+  history_days: 365
+  tail_hours: 168
+  request_delay_seconds: 0.25
+  binance: true
+  bybit: true
+  okx: true
+macro:
+  enabled: true
+  series_ids:
+    - M2SL
+    - WALCL
+    - DGS10
+    - DGS2
+    - T10YIE
+    - FEDFUNDS
+    - DTWEXBGS
+    - VIXCLS
+  request_delay_seconds: 1.0
 

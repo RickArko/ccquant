@@ -1,0 +1,196 @@
+version: 2
+
+models:
+  - name: stg_assets
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+      - name: as_of_date
+        tests:
+          - not_null
+      - name: active
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - symbol
+            - as_of_date
+
+  - name: stg_ohlcv_daily
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+      - name: date
+        tests:
+          - not_null
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['binance', 'coinbase', 'coingecko']
+      - name: volume
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: open
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: high
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: low
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: close
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - symbol
+            - date
+            - source
+
+  - name: stg_ohlcv_hourly
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+      - name: hour
+        tests:
+          - not_null
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['binance', 'coinbase']
+      - name: volume
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: open
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: high
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: low
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: close
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - symbol
+            - hour
+            - source
+
+  - name: stg_sync_state
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+      - name: interval
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['1d', '1h']
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - symbol
+            - interval
+
+  - name: stg_onchain_series
+    columns:
+      - name: metric
+        tests:
+          - not_null
+      - name: date
+        tests:
+          - not_null
+      - name: value
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: -1000000000
+              max_value: 1000000000000000
+      - name: source
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - metric
+            - date
+            - source
+
+  - name: stg_open_interest
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+      - name: timestamp
+        tests:
+          - not_null
+      - name: open_interest
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: exchange
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['binance', 'bybit', 'okx']
+      - name: unit
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['usd_notional', 'coin', 'contracts']
+      - name: interval
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['1d', '1h']
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - symbol
+            - timestamp
+            - exchange
+            - interval
+
+  - name: stg_macro_series
+    columns:
+      - name: series_id
+        tests:
+          - not_null
+      - name: date
+        tests:
+          - not_null
+      - name: value
+        tests:
+          - not_null
+      - name: source
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - series_id
+            - date
+            - source

@@ -1,11 +1,46 @@
-.venv/
+# Python
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+
+# Tool caches
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# Data — never commit databases, exports, or backups
 data/
 *.duckdb
 *.duckdb.wal
 *.parquet
-.ai/*
-.env
+
+# dbt — compiled artifacts, logs, and installed packages
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+dbt/.user.yml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# AI plans (local working files)
+.ai/

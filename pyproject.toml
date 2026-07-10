@@ -8,6 +8,7 @@ dependencies = [
   "duckdb>=1.2.2",
   "httpx>=0.28.1",
   "polars>=1.30.0",
+  "pre-commit>=4.6.0",
   "pyarrow>=24.0.0",
   "python-dotenv>=1.0.0",
   "pyyaml>=6.0.2",
@@ -36,6 +37,10 @@ notebook = [
   "ipykernel>=6.29.5",
   "jupyterlab>=4.3.0",
   "plotly>=6.0.0",
+]
+dbt = [
+  "dbt-core>=1.10",
+  "dbt-duckdb>=1.10",
 ]
 
 [build-system]

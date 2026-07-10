@@ -1,0 +1,36 @@
+version: 2
+
+models:
+  - name: dim_events
+    description: >
+      Curated events registry from seeds/events.csv. Tracks regimes, monetary,
+      political, and legislative events with dates and anticipated effects.
+    columns:
+      - name: event_id
+        tests:
+          - not_null
+          - unique
+      - name: date
+        tests:
+          - not_null
+      - name: title
+        tests:
+          - not_null
+      - name: category
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['regulatory', 'halving', 'monetary', 'legislative', 'political', 'market', 'other']
+      - name: anticipated_effect_direction
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['positive', 'negative', 'neutral']
+      - name: magnitude
+        tests:
+          - accepted_values:
+              values: ['low', 'medium', 'high']
+      - name: confidence
+        tests:
+          - accepted_values:
+              values: ['low', 'medium', 'high']
