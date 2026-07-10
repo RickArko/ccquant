@@ -51,4 +51,3 @@ Keep data ingestion deterministic and boring. Add models in layers:
 2. ML features: lagged returns, rolling volatility, volume features, cross-asset ranks.
 3. Foundation models: convert OHLCV panels into documented time-series prompts or
    dataset artifacts without coupling them to the ingestion code.
-
