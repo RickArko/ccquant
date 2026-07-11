@@ -13,6 +13,10 @@ from ccquant.models import (
 from ccquant.storage import MarketStore
 from ccquant.wallet.alerts import detect_alerts
 from ccquant.wallet.discovery import match_holder_amount, score_wallet_performance
+from ccquant.wallet.extract_bigquery import (
+    build_arbitrum_bigquery_sql,
+    build_solana_bigquery_sql,
+)
 from ccquant.wallet.normalize import (
     transfers_from_arbitrum_tx,
     transfers_from_solana_tx,
@@ -170,6 +174,37 @@ def test_normalize_arbitrum_tx_parses_wei_as_int() -> None:
     }
     transfers = transfers_from_arbitrum_tx(tx, watched=watched, source="test")
     assert transfers[0].amount == pytest.approx(1.0)
+
+
+def test_normalize_arbitrum_tx_parses_float_wei() -> None:
+    watched = {"0xabc"}
+    tx = {
+        "hash": "0xhash",
+        "block_time": "2026-07-01T12:00:00+00:00",
+        "from": "0xabc",
+        "to": "0xdef",
+        "value": 1e18,
+    }
+    transfers = transfers_from_arbitrum_tx(tx, watched=watched, source="test")
+    assert transfers[0].amount == pytest.approx(1.0)
+
+
+def test_bigquery_sql_escapes_address_quotes() -> None:
+    from datetime import date
+
+    addresses = ["addr'with'quote"]
+    sql = build_solana_bigquery_sql(
+        addresses,
+        start=date(2026, 7, 1),
+        end=date(2026, 7, 2),
+    )
+    assert "addr''with''quote" in sql
+    arb_sql = build_arbitrum_bigquery_sql(
+        addresses,
+        start=date(2026, 7, 1),
+        end=date(2026, 7, 2),
+    )
+    assert "addr''with''quote" in arb_sql
 
 
 def test_watched_address_prefers_directional_side() -> None:

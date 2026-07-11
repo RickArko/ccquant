@@ -174,7 +174,7 @@ def sync_macro(
 @sync_app.command("wallets")
 def sync_wallets(
     config: str | None = typer.Option(None, "--config", "-c"),
-    full: bool = typer.Option(False, "--full/--tail"),
+    full: bool = typer.Option(False, "--full/--no-full"),
     no_tail: bool = typer.Option(False, "--no-tail", help="Skip RPC tail refresh"),
 ) -> None:
     """Sync wallet registry, historical extracts, and tail activity."""

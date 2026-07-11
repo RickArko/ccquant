@@ -10,6 +10,10 @@ from ccquant.wallet.normalize import (
 )
 
 
+def _sql_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
 def build_solana_bigquery_sql(
     addresses: list[str],
     *,
@@ -17,7 +21,7 @@ def build_solana_bigquery_sql(
     end: date,
     limit: int = 5000,
 ) -> str:
-    quoted = ", ".join(f"'{addr}'" for addr in addresses)
+    quoted = ", ".join(_sql_quote(addr) for addr in addresses)
     return f"""
         select
           signature,
@@ -41,7 +45,7 @@ def build_arbitrum_bigquery_sql(
     end: date,
     limit: int = 5000,
 ) -> str:
-    quoted = ", ".join(f"lower('{addr}')" for addr in addresses)
+    quoted = ", ".join(f"lower({_sql_quote(addr)})" for addr in addresses)
     return f"""
         select
           transaction_hash as hash,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from ccquant.models import WalletTransfer
@@ -273,7 +274,14 @@ def _token_balance_map(
 def _parse_wei(value: Any) -> int:
     if value is None or value == "":
         return 0
-    return int(value)
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    try:
+        return int(Decimal(str(value)))
+    except (InvalidOperation, ValueError):
+        return 0
 
 
 def _parse_block_time(value: Any) -> datetime:
