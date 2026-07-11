@@ -110,3 +110,92 @@ models:
             - date
             - chain
             - address
+
+  - name: fct_btc_wallet_holdings_daily
+    description: Cumulative BTC holdings per watched address by date.
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: address
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - address
+
+  - name: fct_btc_wallet_counterparties
+    description: Daily BTC counterparty interaction graph.
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: address
+        tests:
+          - not_null
+      - name: counterparty
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - address
+            - counterparty
+
+  - name: fct_btc_insider_moves
+    description: Large BTC moves with identity enrichment.
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: tx_hash
+        tests:
+          - not_null
+      - name: address
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - tx_hash
+            - address
+            - direction
+
+  - name: fct_btc_insider_timing
+    description: Insider move timing scores vs BTC price momentum.
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: address
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - address
+
+  - name: fct_wallet_insider_clusters
+    description: Shared funder and co-move insider cluster events.
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: chain
+        tests:
+          - not_null
+      - name: identity_id
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - chain
+            - identity_id
+            - cluster_type

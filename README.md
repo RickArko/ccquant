@@ -16,7 +16,7 @@ uv sync --all-extras --all-groups
 # CLI + tests only
 uv sync --extra dev
 
-# Notebooks (BTC, Macro, OnChain_BTC, Wallet_SOL)
+# Notebooks (BTC, Macro, OnChain_BTC, Wallet_SOL, Wallet_BTC)
 uv sync --extra dev --extra notebook --extra forecast
 
 # Full pipeline incl. dbt + wallet/BigQuery (same as --all-extras --all-groups)
@@ -27,6 +27,15 @@ uv run ccquant sync universe --size 100
 uv run ccquant sync backfill --interval 1d
 uv run ccquant sync backfill --interval 1h --top 10
 uv run ccquant status
+```
+
+### Wallet intelligence (Solana + Arbitrum + Bitcoin)
+
+```bash
+uv run ccquant sync wallets --no-tail
+uv run ccquant wallet import-extract --source bigquery --chain bitcoin
+uv run ccquant wallet discover --chain bitcoin --top 20
+uv run dbt build --select fct_btc_* fct_wallet_* mart_signals_daily --project-dir dbt --profiles-dir dbt
 ```
 
 By default, data is stored at `data/ccquant.duckdb`. Override it with:

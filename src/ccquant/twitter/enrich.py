@@ -8,6 +8,8 @@ from ccquant.models import Tweet, TweetEntity
 _CASHTAG_RE = re.compile(r"\$([A-Z]{2,10})\b")
 _SOL_DOMAIN_RE = re.compile(r"\b([\w-]{2,32}\.sol)\b", re.IGNORECASE)
 _ETH_ADDRESS_RE = re.compile(r"\b(0x[a-fA-F0-9]{40})\b")
+_BTC_BECH32_RE = re.compile(r"\b(bc1[a-z0-9]{25,62})\b", re.IGNORECASE)
+_BTC_LEGACY_RE = re.compile(r"\b([13][a-km-zA-HJ-NP-Z1-9]{25,34})\b")
 _SOL_ADDRESS_RE = re.compile(r"\b([1-9A-HJ-NP-Za-km-z]{32,44})\b")
 _URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
 
@@ -36,9 +38,28 @@ def extract_entities(
             _add_entity(
                 entities, seen, tweet.tweet_id, "eth_address", match.group(1).lower()
             )
+        for match in _BTC_BECH32_RE.finditer(text):
+            _add_entity(
+                entities,
+                seen,
+                tweet.tweet_id,
+                "btc_address",
+                match.group(1).lower(),
+            )
+        for match in _BTC_LEGACY_RE.finditer(text):
+            candidate = match.group(1)
+            _add_entity(
+                entities,
+                seen,
+                tweet.tweet_id,
+                "btc_address",
+                candidate,
+            )
         for match in _SOL_ADDRESS_RE.finditer(text):
             candidate = match.group(1)
             if candidate.startswith("0x"):
+                continue
+            if _BTC_LEGACY_RE.fullmatch(candidate):
                 continue
             if len(candidate) < 32:
                 continue

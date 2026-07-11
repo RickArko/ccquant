@@ -1,5 +1,5 @@
 select
-  lower(address) as address,
+  case when chain = 'bitcoin' then address else lower(address) end as address,
   chain,
   label,
   entity_type,

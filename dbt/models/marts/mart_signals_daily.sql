@@ -48,6 +48,9 @@ select
   ws.deployer_activity_count,
   ws.cabal_alert_count,
   ws.top_wallet_accumulation_score,
+  ws.insider_netflow_usd,
+  ws.insider_timing_score,
+  ws.insider_cluster_count,
   tw.tweet_mention_count,
   tw.kol_tweet_mention_count,
   tw.tweet_sentiment_net

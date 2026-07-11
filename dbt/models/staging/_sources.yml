@@ -229,3 +229,24 @@ sources:
           - name: action
           - name: severity
           - name: block_time
+
+      - name: wallet_identities
+        description: >
+          Insider and institutional identity catalog.
+          Grain: identity_id.
+        columns:
+          - name: identity_id
+          - name: display_name
+          - name: category
+          - name: active
+
+      - name: wallet_identity_links
+        description: >
+          Links between on-chain addresses and identities.
+          Grain: address x chain x identity_id.
+        columns:
+          - name: address
+          - name: chain
+          - name: identity_id
+          - name: link_type
+          - name: confidence

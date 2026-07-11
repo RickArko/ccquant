@@ -1,0 +1,14 @@
+address,chain,identity_id,link_type,confidence,source
+bc1q0354ypeak66322j0zr0ysm4wd9qkx2x66e4q0,bitcoin,strategy,owns,0.90,manual
+bc1qjasf9z3h7l3jkaware86a4s4ut9t928cerovd,bitcoin,strategy,owns,0.85,manual
+34xp4vRoCG5Jh1B5fszvzu5uBmM2a5jSNi,bitcoin,binance,operates,0.95,manual
+bc1qm34lsc65zpw79lxes69z91rwu5e4v4dxjvmu3,bitcoin,binance,operates,0.95,manual
+3GUJmmpoK7AZeE33ZhmrQrcxC6JKpMrjfK,bitcoin,binance,operates,0.90,manual
+1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj,bitcoin,coinbase,operates,0.95,manual
+3QJmV3qfvL9SuYo34YihAf3sEmW6uKcBAS,bitcoin,kraken,operates,0.90,manual
+1Kr6QSydW9bFQG1mXiPNNu6WpJGmUa9M1a,bitcoin,bitfinex,operates,0.90,manual
+bc1qgdjkv0jn3t9kvacjfary0w5fth3399etw8pml,bitcoin,bitfinex,operates,0.90,manual
+1LQoWist8KkaUXSPKZHNvMmurTivccXaaG,bitcoin,okx,operates,0.90,manual
+3MmRZcq6vBY6WXEWDeNVp2N9du4zH7mG1,bitcoin,grayscale,operates,0.90,manual
+3BMEXqYyN5k4ZkPLS8z63vhxr5pJCdV7s,bitcoin,f2pool,operates,0.85,manual
+bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh,bitcoin,marathon,associated,0.70,manual

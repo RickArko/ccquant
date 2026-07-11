@@ -7,6 +7,8 @@ import pytest
 
 from ccquant.models import (
     WalletAlert,
+    WalletIdentity,
+    WalletIdentityLink,
     WalletRegistryEntry,
     WalletTransfer,
 )
@@ -15,6 +17,7 @@ from ccquant.wallet.alerts import detect_alerts
 from ccquant.wallet.discovery import match_holder_amount, score_wallet_performance
 from ccquant.wallet.extract_bigquery import (
     build_arbitrum_bigquery_sql,
+    build_bitcoin_bigquery_sql,
     build_solana_bigquery_sql,
 )
 from ccquant.wallet.normalize import (
@@ -47,6 +50,9 @@ def test_committed_seed_file_loads() -> None:
     chains = {entry.chain for entry in entries}
     assert "solana" in chains
     assert "arbitrum" in chains
+    assert "bitcoin" in chains
+    bitcoin_entries = [e for e in entries if e.chain == "bitcoin"]
+    assert len(bitcoin_entries) >= 15
 
 
 def test_upsert_wallet_registry_is_idempotent(tmp_path) -> None:
@@ -402,6 +408,63 @@ def test_history_complete_ignores_non_history_sources(tmp_path) -> None:
         store.close()
 
 
+def test_upsert_wallet_identities_and_links(tmp_path) -> None:
+    store = MarketStore(tmp_path / "ccquant.duckdb")
+    try:
+        now = datetime.now(tz=UTC)
+        identities = [
+            WalletIdentity(
+                identity_id="strategy",
+                display_name="MicroStrategy",
+                category="corporate",
+                description="",
+                source_url="",
+                active=True,
+            )
+        ]
+        links = [
+            WalletIdentityLink(
+                address="1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj",
+                chain="bitcoin",
+                identity_id="strategy",
+                link_type="owns",
+                confidence=0.9,
+                source="manual",
+                linked_at=now,
+            ),
+            WalletIdentityLink(
+                address="bc1qjasf9z3h7l3jkaware86a4s4ut9t928cerovd",
+                chain="bitcoin",
+                identity_id="strategy",
+                link_type="owns",
+                confidence=0.85,
+                source="manual",
+                linked_at=now,
+            ),
+        ]
+        assert store.upsert_wallet_identities(identities) == 1
+        assert store.upsert_wallet_identity_links(links) == 2
+        row = store.connection.execute(
+            "select count(*) from wallet_identity_links where identity_id = 'strategy'"
+        ).fetchone()
+        assert row is not None
+        assert int(row[0]) == 2
+    finally:
+        store.close()
+
+
+def test_build_bitcoin_bigquery_sql_filters_addresses() -> None:
+    from datetime import date
+
+    sql = build_bitcoin_bigquery_sql(
+        ["1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj"],
+        start=date(2024, 1, 1),
+        end=date(2024, 1, 7),
+    )
+    assert "crypto_bitcoin.transactions" in sql
+    assert "1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj" in sql
+
+
 @pytest.mark.asyncio
 async def test_fetch_signatures_returns_empty_on_http_error() -> None:
     from unittest.mock import AsyncMock, MagicMock
@@ -420,6 +483,84 @@ async def test_fetch_signatures_returns_empty_on_http_error() -> None:
         limit=5,
     )
     assert sigs == []
+
+
+@pytest.mark.asyncio
+async def test_sync_all_no_tail_skips_history_and_tail(tmp_path) -> None:
+    from dataclasses import replace
+    from unittest.mock import AsyncMock, patch
+
+    from ccquant.config import load_config
+    from ccquant.wallet.sync import WalletSync
+
+    cfg = replace(load_config(), database=tmp_path / "ccquant.duckdb")
+    store = MarketStore(cfg.database)
+    syncer = WalletSync(store, cfg)
+    try:
+        with (
+            patch.object(
+                syncer,
+                "backfill_history",
+                new=AsyncMock(return_value=99),
+            ) as backfill,
+            patch.object(
+                syncer,
+                "tail_refresh",
+                new=AsyncMock(return_value=88),
+            ) as tail,
+        ):
+            counts = await syncer.sync_all(full=False, tail=False, history=False)
+        assert "registry" in counts
+        assert "history" not in counts
+        assert "tail" not in counts
+        backfill.assert_not_called()
+        tail.assert_not_called()
+    finally:
+        await syncer.close()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_backfill_solarchive_skips_missing_partitions(tmp_path) -> None:
+    from dataclasses import replace
+    from unittest.mock import AsyncMock, patch
+
+    from ccquant.config import load_config
+    from ccquant.wallet.extract_solarchive import SolArchivePartitionNotFoundError
+    from ccquant.wallet.sync import WalletSync
+
+    cfg = replace(load_config(), database=tmp_path / "ccquant.duckdb")
+    store = MarketStore(cfg.database)
+    now = datetime.now(tz=UTC)
+    store.upsert_wallet_registry(
+        [
+            WalletRegistryEntry(
+                address="abc123",
+                chain="solana",
+                label="Test",
+                entity_type="kol",
+                confidence=0.8,
+                source="manual",
+                discovered_at=now,
+                active=True,
+            )
+        ]
+    )
+    syncer = WalletSync(store, cfg)
+    try:
+        fetch = AsyncMock(
+            side_effect=SolArchivePartitionNotFoundError("missing partition")
+        )
+        with patch(
+            "ccquant.wallet.sync.fetch_partition_index",
+            fetch,
+        ):
+            total = await syncer._backfill_solarchive()
+        assert total == 0
+        assert fetch.await_count > 0
+    finally:
+        await syncer.close()
+        store.close()
 
 
 @pytest.mark.asyncio

@@ -363,6 +363,34 @@ models:
             - chain
             - source
 
+  - name: stg_wallet_identities
+    columns:
+      - name: identity_id
+        tests:
+          - not_null
+          - unique
+      - name: display_name
+        tests:
+          - not_null
+
+  - name: stg_wallet_identity_links
+    columns:
+      - name: address
+        tests:
+          - not_null
+      - name: chain
+        tests:
+          - not_null
+      - name: identity_id
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - address
+            - chain
+            - identity_id
+
   - name: stg_onchain_sync_state
     columns:
       - name: metric

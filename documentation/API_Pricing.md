@@ -256,13 +256,14 @@ Charts for Puell Multiple, MVRV Z-Score, RHODL, Reserve Risk, SOPR.
 
 ### Wallet intelligence data sources (v1 — $0 stack)
 
-Used by `ccquant sync wallets` and `Wallet_SOL.ipynb`.
+Used by `ccquant sync wallets`, `Wallet_SOL.ipynb`, and `Wallet_BTC.ipynb`.
 
 | Source | Role | Free? | Key? | V1 recommendation |
 |---|---|---|---|---|
 | **SolArchive** | Solana historical Parquet partitions | Free (CC-BY-4.0) | No | **Use** for bounded history backfill |
-| **BigQuery public** | Solana + Arbitrum SQL extracts | Free (1 TB/mo) | GCP creds optional | **Use** with `uv sync --extra wallet` |
-| **Flipside** | Wallet labels (`dim_labels`) | Free tier | `FLIPSIDE_API_KEY` | **Use** for discovery |
+| **BigQuery public** | Solana + Arbitrum + Bitcoin SQL extracts | Free (1 TB/mo) | GCP creds optional | **Use** with `uv sync --extra wallet` |
+| **mempool.space** | Bitcoin tail (`/address/{addr}/txs`) | Free | No | **Use** — rate-limit via `request_delay_seconds` |
+| **Flipside** | Wallet labels (`dim_labels`) | Free tier | `FLIPSIDE_API_KEY` | **Use** for discovery (incl. `bitcoin.core.dim_labels`) |
 | **Solana public RPC** | Tail refresh (`getSignaturesForAddress`) | Free | No | **Smoke test only** — `429` at 50 wallets; use dedicated RPC for tail |
 | **camp** | Arbitrum tail REST API | Free | No | **Use** (rolling ~30d window) |
 | **Etherscan** | ETH/Arbitrum ERC-20 tail | Free (100k calls/day) | `ETHERSCAN_API_KEY` | Optional |
@@ -273,8 +274,9 @@ Used by `ccquant sync wallets` and `Wallet_SOL.ipynb`.
 
 1. Load seed registry from `config/seeds/wallet_registry_seed.csv`
 2. Import one partition: `uv run ccquant wallet import-extract --source solarchive --date YYYY-MM-DD`
-3. Or local parquet: `uv run ccquant wallet import-extract --source solarchive --parquet PATH`
-4. Re-run to verify idempotent upserts before scaling `extract_days`
+3. Bitcoin history: `uv run ccquant wallet import-extract --source bigquery --chain bitcoin`
+4. Or local parquet: `uv run ccquant wallet import-extract --source solarchive --parquet PATH`
+5. Re-run to verify idempotent upserts before scaling `extract_days`
 
 **Rollback:** `uv run ccquant db backup` before large extracts; restore file copy to roll back.
 
@@ -352,6 +354,7 @@ terms of service:
 | bitcoinisdata.com | API: sequential, cached in DuckDB; CSV: one-time download |
 | Glassnode | 6s spacing, 12h staleness gate, 50 calls/day cap (Light API) |
 | Solana public RPC | 1 req/s per wallet; max 50 wallets in tail config |
+| mempool.space | 1 req/s per address; keep `max_wallets` low for bitcoin tail |
 | Flipside | Cache labels in DuckDB; refresh weekly not hourly |
 | SolArchive | Download single-day partitions only; filter to seed wallets |
 | Twitter import | Idempotent on `tweet_id`; inbox files archived after import |

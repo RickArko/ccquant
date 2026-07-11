@@ -17,5 +17,8 @@ select
 from {{ ref('stg_tweet_entities') }} e
 join {{ ref('stg_tweets') }} t on e.tweet_id = t.tweet_id
 left join {{ ref('stg_wallet_registry') }} w
-  on lower(e.entity_value) = w.address
-where e.entity_type in ('sol_address', 'eth_address')
+  on (
+    (e.entity_type = 'eth_address' and lower(e.entity_value) = w.address)
+    or (e.entity_type in ('sol_address', 'btc_address') and e.entity_value = w.address)
+  )
+where e.entity_type in ('sol_address', 'eth_address', 'btc_address')

@@ -160,6 +160,27 @@ class WalletAlert:
 
 
 @dataclass(frozen=True)
+class WalletIdentity:
+    identity_id: str
+    display_name: str
+    category: str
+    description: str
+    source_url: str
+    active: bool
+
+
+@dataclass(frozen=True)
+class WalletIdentityLink:
+    address: str
+    chain: str
+    identity_id: str
+    link_type: str
+    confidence: float
+    source: str
+    linked_at: datetime
+
+
+@dataclass(frozen=True)
 class TwitterAccount:
     handle: str
     user_id: str | None

@@ -5,6 +5,7 @@ from typing import Any
 
 from ccquant.models import WalletTransfer
 from ccquant.wallet.normalize import (
+    transfer_from_bitcoin_bq_row,
     transfers_from_arbitrum_tx,
     transfers_from_solarchive_row,
 )
@@ -64,12 +65,75 @@ def build_arbitrum_bigquery_sql(
     """
 
 
+def build_bitcoin_bigquery_sql(
+    addresses: list[str],
+    *,
+    start: date,
+    end: date,
+    limit: int = 5000,
+) -> str:
+    quoted = ", ".join(_sql_quote(addr) for addr in addresses)
+    return f"""
+        with watched as (
+          select address from unnest([{quoted}]) as address
+        ),
+        output_legs as (
+          select
+            t.hash,
+            t.block_timestamp as block_time,
+            output.index as leg_index,
+            addr as address,
+            output.value as value_sats,
+            output.type as script_type,
+            'inflow' as direction
+          from `bigquery-public-data.crypto_bitcoin.transactions` t,
+          unnest(t.outputs) as output with offset as output_offset
+          cross join unnest(output.addresses) as addr
+          where t.block_timestamp between timestamp('{start.isoformat()}')
+            and timestamp('{end.isoformat()}')
+            and addr in (select address from watched)
+        ),
+        input_legs as (
+          select
+            t.hash,
+            t.block_timestamp as block_time,
+            input.index as leg_index,
+            addr as address,
+            input.value as value_sats,
+            input.type as script_type,
+            'outflow' as direction
+          from `bigquery-public-data.crypto_bitcoin.transactions` t,
+          unnest(t.inputs) as input with offset as input_offset
+          cross join unnest(input.addresses) as addr
+          where t.block_timestamp between timestamp('{start.isoformat()}')
+            and timestamp('{end.isoformat()}')
+            and addr in (select address from watched)
+        ),
+        legs as (
+          select * from output_legs
+          union all
+          select * from input_legs
+        )
+        select
+          hash,
+          block_time,
+          leg_index,
+          address,
+          value_sats,
+          script_type,
+          direction
+        from legs
+        order by block_time desc
+        limit {limit}
+    """
+
+
 def run_bigquery_extract(
     sql: str,
 ) -> list[dict[str, Any]]:
     """Run a bounded BigQuery extract when google-cloud-bigquery is installed."""
     try:
-        from google.cloud import bigquery  # type: ignore[import-not-found]
+        from google.cloud import bigquery  # type: ignore[import-untyped]
     except ImportError as exc:
         raise RuntimeError(
             "google-cloud-bigquery not installed; "
@@ -97,6 +161,12 @@ def rows_to_transfers(
             transfers.extend(
                 transfers_from_arbitrum_tx(row, watched=watched, source="bigquery")
             )
+        elif chain == "bitcoin":
+            transfer = transfer_from_bitcoin_bq_row(row, source="bigquery")
+            if transfer is not None:
+                watched_addr = transfer.to_address or transfer.from_address
+                if watched_addr in watched:
+                    transfers.append(transfer)
     return transfers
 
 

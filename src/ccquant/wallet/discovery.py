@@ -30,6 +30,7 @@ async def fetch_flipside_labels(
         "solana": "solana.core.dim_labels",
         "arbitrum": "arbitrum.core.dim_labels",
         "ethereum": "ethereum.core.dim_labels",
+        "bitcoin": "bitcoin.core.dim_labels",
     }.get(chain)
     if table is None:
         return []
@@ -37,7 +38,7 @@ async def fetch_flipside_labels(
     sql = f"""
         select address, label_type, label_subtype, project_name, address_name
         from {table}
-        where label_type in ('cex', 'dex', 'defi', 'bridge')
+        where label_type in ('cex', 'dex', 'defi', 'bridge', 'miner', 'institution')
         limit {limit}
     """
     payload = {
@@ -199,6 +200,8 @@ def _map_entity_type(label_type: str) -> str:
         "bridge": "bridge",
         "nft": "whale",
         "dapp": "deployer",
+        "miner": "insider",
+        "institution": "insider",
     }
     return mapping.get(label_type.lower(), "smart_money")
 
@@ -218,6 +221,8 @@ def _fallback_labels(chain: str, limit: int) -> list[WalletRegistryEntry]:
         suffix = f"{idx:03d}"
         if chain == "solana":
             address = f"Seed{suffix}Wallet{chain[:3]}SeedWalletSeedWalletSeed"
+        elif chain == "bitcoin":
+            address = f"1Seed{suffix}BitcoinSeedWalletSeedWalletSeed"[:34]
         else:
             address = f"0xSeed{suffix}{chain[:3]}000000000000000000000"
         entries.append(

@@ -93,6 +93,38 @@ def test_extract_entities_cashtags_and_addresses() -> None:
     assert "sol_domain" in types
 
 
+def test_extract_entities_btc_addresses() -> None:
+    cfg = TwitterEnrichmentConfig()
+    tweet = Tweet(
+        tweet_id="2",
+        handle="saylor",
+        posted_at=datetime.now(tz=UTC),
+        text=(
+            "Treasury wallet 1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj "
+            "and bc1qjasf9z3h7l3jkaware86a4s4ut9t928cerovd"
+        ),
+        lang=None,
+        is_retweet=False,
+        is_reply=False,
+        reply_to_tweet_id=None,
+        conversation_id=None,
+        like_count=0,
+        retweet_count=0,
+        reply_count=0,
+        import_source="csv",
+        imported_at=datetime.now(tz=UTC),
+        raw_json="{}",
+    )
+    entities = extract_entities(tweet, cfg)
+    btc_addrs = {
+        entity.entity_value
+        for entity in entities
+        if entity.entity_type == "btc_address"
+    }
+    assert "1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj" in btc_addrs
+    assert "bc1qjasf9z3h7l3jkaware86a4s4ut9t928cerovd" in btc_addrs
+
+
 def test_score_sentiment() -> None:
     cfg = TwitterEnrichmentConfig()
     bullish, bearish = score_sentiment("Long and buy the dip", cfg)

@@ -38,7 +38,9 @@ uv run ccquant sync wallets --full       # force historical extract
 uv run ccquant sync wallets              # + RPC tail (needs dedicated solana_rpc_url)
 uv run ccquant migrate onchain [--source FILE]  # migrate onchain.duckdb into main DB
 uv run ccquant wallet discover --chain solana --top 20
+uv run ccquant wallet discover --chain bitcoin --top 20
 uv run ccquant wallet import-extract --source solarchive --date YYYY-MM-DD
+uv run ccquant wallet import-extract --source bigquery --chain bitcoin
 uv run ccquant wallet resolve-sns mitch.sol
 uv run ccquant wallet alerts --since 1
 uv run ccquant db backup [--dest DIR] [--keep N]  # timestamped file-copy backup
@@ -91,7 +93,8 @@ dbt step (e.g. when dbt isn't installed). Use `--no-wallets` to skip wallet sync
   `onchain_series`, `onchain_sync_state`, `open_interest`, `macro_series`,
   `macro_sync_state`, `wallet_registry`, `wallet_transfers`,
   `wallet_positions_daily`, `wallet_sync_state`, `wallet_signals_daily`,
-  `wallet_alerts`. Schema is created idempotently on `MarketStore` init.
+  `wallet_alerts`, `wallet_identities`, `wallet_identity_links`. Schema is
+  created idempotently on `MarketStore` init.
   `sync_state.earliest_at`/`latest_at` are stored as ISO varchar.
 - dbt transformation layer lives in `dbt/`. Python owns `main` schema (raw);
   dbt owns `main_staging` (views), `main_marts` (tables), `main_signals`

@@ -37,6 +37,8 @@ def seed_dbt_ci_fixture(database: str | Path | None = None) -> Path:
         "wallet_signals_daily",
         "wallet_alerts",
         "wallet_sync_state",
+        "wallet_identities",
+        "wallet_identity_links",
         "twitter_accounts",
         "tweets",
         "tweet_entities",
@@ -142,12 +144,71 @@ def seed_dbt_ci_fixture(database: str | Path | None = None) -> Path:
             insert into main.wallet_registry (
               address, chain, label, entity_type, confidence, source,
               discovered_at, active, metadata_json
-            ) values (
+            ) values
+            (
               'abc123', 'solana', 'test_wallet', 'smart_money', 0.9, 'manual',
               ?, true, '{}'
+            ),
+            (
+              'bc1q0354ypeak66322j0zr0ysm4wd9qkx2x66e4q0', 'bitcoin',
+              'Strategy Treasury', 'insider', 0.9, 'manual', ?, true, '{}'
+            ),
+            (
+              '34xp4vRoCG5Jh1B5fszvzu5uBmM2a5jSNi', 'bitcoin',
+              'Binance Cold', 'exchange', 0.95, 'manual', ?, true, '{}'
             )
             """,
-            [now],
+            [now, now, now],
+        )
+        conn.execute(
+            """
+            insert into main.wallet_identities (
+              identity_id, display_name, category, description, source_url, active
+            ) values
+            ('strategy', 'MicroStrategy', 'corporate', '', '', true),
+            ('binance', 'Binance', 'exchange', '', '', true)
+            """
+        )
+        conn.execute(
+            """
+            insert into main.wallet_identity_links (
+              address, chain, identity_id, link_type, confidence, source, linked_at
+            ) values
+            (
+              'bc1q0354ypeak66322j0zr0ysm4wd9qkx2x66e4q0', 'bitcoin', 'strategy',
+              'owns', 0.9, 'manual', ?
+            ),
+            (
+              'bc1qjasf9z3h7l3jkaware86a4s4ut9t928cerovd', 'bitcoin', 'strategy',
+              'owns', 0.85, 'manual', ?
+            ),
+            (
+              '34xp4vRoCG5Jh1B5fszvzu5uBmM2a5jSNi', 'bitcoin', 'binance',
+              'operates', 0.95, 'manual', ?
+            )
+            """,
+            [now, now, now],
+        )
+        conn.execute(
+            """
+            insert into main.wallet_transfers (
+              chain, tx_hash, transfer_index, block_time, from_address, to_address,
+              asset_mint_or_contract, asset_symbol, amount, amount_usd, direction,
+              program_or_method, source
+            ) values
+            (
+              'bitcoin', 'btc_tx_1', 0, ?, '34xp4vRoCG5Jh1B5fszvzu5uBmM2a5jSNi',
+              'bc1q0354ypeak66322j0zr0ysm4wd9qkx2x66e4q0',
+              'btc', 'BTC', 50.0, 2500000.0,
+              'inflow', 'p2pkh', 'fixture'
+            ),
+            (
+              'bitcoin', 'btc_tx_2', 0, ?, 'bc1q0354ypeak66322j0zr0ysm4wd9qkx2x66e4q0',
+              '34xp4vRoCG5Jh1B5fszvzu5uBmM2a5jSNi', 'btc', 'BTC', 25.0, 1250000.0,
+              'outflow', 'p2pkh', 'fixture'
+            )
+            """,
+            [now, now],
         )
 
     return db_path

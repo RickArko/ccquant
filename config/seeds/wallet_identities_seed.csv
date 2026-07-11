@@ -1,0 +1,10 @@
+identity_id,display_name,category,description,source_url,active
+strategy,MicroStrategy / Strategy,corporate,Public BTC treasury accumulator,https://www.strategy.com/,true
+grayscale,Grayscale Investments,corporate,GBTC and spot ETF custodian,https://grayscale.com/,true
+binance,Binance,exchange,Global exchange hot and cold wallets,https://www.binance.com/,true
+coinbase,Coinbase,exchange,US exchange custody wallets,https://www.coinbase.com/,true
+kraken,Kraken,exchange,Exchange custody wallets,https://www.kraken.com/,true
+bitfinex,Bitfinex,exchange,Exchange custody wallets,https://www.bitfinex.com/,true
+okx,OKX,exchange,Exchange custody wallets,https://www.okx.com/,true
+f2pool,F2Pool,miner,Mining pool operator,https://www.f2pool.com/,true
+marathon,Marathon Digital Holdings,corporate,Public BTC miner,https://www.mara.com/,true

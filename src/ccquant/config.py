@@ -62,6 +62,7 @@ class UniverseConfig:
 @dataclass(frozen=True)
 class WalletHistoryConfig:
     solana_source: str = "solarchive"
+    bitcoin_source: str = "bigquery"
     extract_days: int = 7
 
 
@@ -72,6 +73,7 @@ class WalletTailConfig:
     max_wallets: int = 50
     request_delay_seconds: float = 1.0
     solana_rpc_url: str = "https://api.mainnet-beta.solana.com"
+    bitcoin_api_url: str = "https://mempool.space/api"
 
 
 @dataclass(frozen=True)
@@ -85,10 +87,18 @@ class WalletDiscoveryConfig:
 class WalletTrackingConfig:
     enabled: bool = True
     chains: list[str] = field(
-        default_factory=lambda: ["solana", "arbitrum"]
+        default_factory=lambda: ["solana", "arbitrum", "bitcoin"]
     )
     seed_file: Path = field(
         default_factory=lambda: Path("config/seeds/wallet_registry_seed.csv")
+    )
+    identities_seed_file: Path = field(
+        default_factory=lambda: Path("config/seeds/wallet_identities_seed.csv")
+    )
+    identity_links_seed_file: Path = field(
+        default_factory=lambda: Path(
+            "config/seeds/wallet_identity_links_seed.csv"
+        )
     )
     history: WalletHistoryConfig = field(default_factory=WalletHistoryConfig)
     tail: WalletTailConfig = field(default_factory=WalletTailConfig)
@@ -248,7 +258,9 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             enabled=bool(wallet_data.get("enabled", True)),
             chains=[
                 str(chain).lower()
-                for chain in wallet_data.get("chains", ["solana", "arbitrum"])
+                for chain in wallet_data.get(
+                    "chains", ["solana", "arbitrum", "bitcoin"]
+                )
             ],
             seed_file=Path(
                 str(
@@ -257,9 +269,28 @@ def load_config(path: str | Path | None = None) -> AppConfig:
                     )
                 )
             ),
+            identities_seed_file=Path(
+                str(
+                    wallet_data.get(
+                        "identities_seed_file",
+                        "config/seeds/wallet_identities_seed.csv",
+                    )
+                )
+            ),
+            identity_links_seed_file=Path(
+                str(
+                    wallet_data.get(
+                        "identity_links_seed_file",
+                        "config/seeds/wallet_identity_links_seed.csv",
+                    )
+                )
+            ),
             history=WalletHistoryConfig(
                 solana_source=str(
                     history_data.get("solana_source", "solarchive")
+                ),
+                bitcoin_source=str(
+                    history_data.get("bitcoin_source", "bigquery")
                 ),
                 extract_days=int(history_data.get("extract_days", 7)),
             ),
@@ -274,6 +305,12 @@ def load_config(path: str | Path | None = None) -> AppConfig:
                     tail_data.get(
                         "solana_rpc_url",
                         "https://api.mainnet-beta.solana.com",
+                    )
+                ),
+                bitcoin_api_url=str(
+                    tail_data.get(
+                        "bitcoin_api_url",
+                        "https://mempool.space/api",
                     )
                 ),
             ),

@@ -13,20 +13,30 @@ from ccquant.wallet.alerts import detect_alerts
 from ccquant.wallet.discovery import fetch_flipside_labels
 from ccquant.wallet.extract_bigquery import (
     build_arbitrum_bigquery_sql,
+    build_bitcoin_bigquery_sql,
     build_solana_bigquery_sql,
     default_date_range,
     rows_to_transfers,
     run_bigquery_extract,
 )
 from ccquant.wallet.extract_solarchive import (
+    SolArchivePartitionNotFoundError,
     download_parquet_file,
     fetch_partition_index,
     load_transfers_from_parquet,
     partition_dates,
 )
 from ccquant.wallet.normalize import watched_address
-from ccquant.wallet.seeds import load_seed_registry, resolve_seed_path
+from ccquant.wallet.seeds import (
+    load_seed_identities,
+    load_seed_identity_links,
+    load_seed_registry,
+    resolve_identity_links_seed_path,
+    resolve_identity_seed_path,
+    resolve_seed_path,
+)
 from ccquant.wallet.tail_arbitrum import tail_arbitrum_wallets
+from ccquant.wallet.tail_bitcoin import tail_bitcoin_wallets
 from ccquant.wallet.tail_solana import tail_solana_wallets
 
 
@@ -44,22 +54,33 @@ class WalletSync:
         *,
         full: bool = False,
         tail: bool = True,
+        history: bool = True,
     ) -> dict[str, int]:
         cfg = self.config.wallet_tracking
         if not cfg.enabled:
             return {}
         counts: dict[str, int] = {}
         counts["registry"] = await self.load_registry()
-        if full or not self._history_complete():
+        if history and (full or not self._history_complete()):
             counts["history"] = await self.backfill_history()
         if tail and cfg.tail.enabled:
             counts["tail"] = await self.tail_refresh()
         return counts
 
     async def load_registry(self) -> int:
-        seed_path = resolve_seed_path(self.config.wallet_tracking.seed_file)
+        cfg = self.config.wallet_tracking
+        seed_path = resolve_seed_path(cfg.seed_file)
         entries = load_seed_registry(seed_path)
-        return self.store.upsert_wallet_registry(entries)
+        count = self.store.upsert_wallet_registry(entries)
+        identities_path = resolve_identity_seed_path(cfg.identities_seed_file)
+        identities = load_seed_identities(identities_path)
+        if identities:
+            self.store.upsert_wallet_identities(identities)
+        links_path = resolve_identity_links_seed_path(cfg.identity_links_seed_file)
+        links = load_seed_identity_links(links_path)
+        if links:
+            self.store.upsert_wallet_identity_links(links)
+        return count
 
     async def discover(
         self,
@@ -83,18 +104,21 @@ class WalletSync:
         self,
         *,
         source: str,
+        chain: str = "solana",
         partition_date: date | None = None,
         parquet_path: Path | None = None,
     ) -> int:
-        watched = self._watched_addresses("solana")
+        watched = self._watched_addresses(chain)
         if source == "solarchive":
+            if chain != "solana":
+                raise ValueError("solarchive extract supports solana only")
             return await self._import_solarchive(
                 partition_date=partition_date,
                 parquet_path=parquet_path,
                 watched=watched,
             )
         if source == "bigquery":
-            return self._import_bigquery(watched=watched)
+            return self._import_bigquery(watched=watched, chain=chain)
         raise ValueError(f"unsupported extract source: {source}")
 
     async def backfill_history(self) -> int:
@@ -113,6 +137,12 @@ class WalletSync:
                 watched=self._watched_addresses("arbitrum"),
                 chain="arbitrum",
             )
+        if "bitcoin" in cfg.chains:
+            if cfg.history.bitcoin_source == "bigquery":
+                total += self._import_bigquery(
+                    watched=self._watched_addresses("bitcoin"),
+                    chain="bitcoin",
+                )
         self._mark_history_complete()
         return total
 
@@ -148,6 +178,25 @@ class WalletSync:
                 self._registry_map(),
             )
             self.store.upsert_wallet_alerts(alerts)
+        bitcoin_addrs = self._limited_addresses("bitcoin")
+        if bitcoin_addrs:
+            transfers = await tail_bitcoin_wallets(
+                self._client,
+                api_url=cfg.tail.bitcoin_api_url,
+                addresses=bitcoin_addrs,
+                delay_seconds=cfg.tail.request_delay_seconds,
+            )
+            total += self.store.upsert_wallet_transfers(transfers)
+            self._update_sync_states(
+                transfers,
+                chain="bitcoin",
+                source="mempool_tail",
+            )
+            alerts = detect_alerts(
+                transfers,
+                self._registry_map(),
+            )
+            self.store.upsert_wallet_alerts(alerts)
         return total
 
     async def _backfill_solarchive(self) -> int:
@@ -161,7 +210,7 @@ class WalletSync:
         ):
             try:
                 files = await fetch_partition_index(self._client, partition)
-            except httpx.HTTPError:
+            except (httpx.HTTPError, SolArchivePartitionNotFoundError):
                 continue
             for file_url in files[:2]:
                 name = Path(file_url).name
@@ -235,6 +284,8 @@ class WalletSync:
         )
         if chain == "arbitrum":
             sql = build_arbitrum_bigquery_sql(watched, start=start, end=end)
+        elif chain == "bitcoin":
+            sql = build_bitcoin_bigquery_sql(watched, start=start, end=end)
         else:
             sql = build_solana_bigquery_sql(watched, start=start, end=end)
         try:
