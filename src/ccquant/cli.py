@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Annotated
 
+import httpx
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -13,16 +14,22 @@ from rich.table import Table
 from ccquant.config import AppConfig, load_config
 from ccquant.storage import MarketStore
 from ccquant.sync import MarketSync
+from ccquant.twitter import TwitterSync
+from ccquant.wallet import WalletSync
 
 app = typer.Typer(help="Crypto OHLCV data and forecasting research toolkit")
 sync_app = typer.Typer(help="Fetch and refresh market data")
 export_app = typer.Typer(help="Export DuckDB tables")
 migrate_app = typer.Typer(help="Migrate data between databases")
 db_app = typer.Typer(help="Database backup and maintenance")
+wallet_app = typer.Typer(help="Wallet intelligence and on-chain tracking")
+twitter_app = typer.Typer(help="Twitter / X tweet tracking (import-only)")
 app.add_typer(sync_app, name="sync")
 app.add_typer(export_app, name="export")
 app.add_typer(migrate_app, name="migrate")
 app.add_typer(db_app, name="db")
+app.add_typer(wallet_app, name="wallet")
+app.add_typer(twitter_app, name="twitter")
 console = Console()
 
 
@@ -164,6 +171,54 @@ def sync_macro(
         console.print(f"  {series_id}: {count}")
 
 
+@sync_app.command("wallets")
+def sync_wallets(
+    config: str | None = typer.Option(None, "--config", "-c"),
+    full: bool = typer.Option(False, "--full/--no-full"),
+    no_tail: bool = typer.Option(False, "--no-tail", help="Skip RPC tail refresh"),
+) -> None:
+    """Sync wallet registry, historical extracts, and tail activity."""
+    store, cfg = _load(config)
+    syncer = WalletSync(store, cfg)
+
+    async def run() -> dict[str, int]:
+        try:
+            return await syncer.sync_all(full=full, tail=not no_tail)
+        finally:
+            await syncer.close()
+
+    results = asyncio.run(run())
+    counts = store.wallet_row_counts()
+    console.print("[green]Wallet sync complete[/green]")
+    for key, value in results.items():
+        console.print(f"  {key}: {value}")
+    console.print(
+        f"  registry rows: {counts.get('wallet_registry', 0)}, "
+        f"transfer rows: {counts.get('wallet_transfers', 0)}"
+    )
+    store.close()
+
+
+@sync_app.command("tweets")
+def sync_tweets(
+    config: str | None = typer.Option(None, "--config", "-c"),
+) -> None:
+    """Import tweets from inbox CSV/JSONL, enrich, and aggregate signals."""
+    store, cfg = _load(config)
+    syncer = TwitterSync(store, cfg)
+    results = syncer.sync_all()
+    counts = store.twitter_row_counts()
+    console.print("[green]Tweet sync complete[/green]")
+    for key, value in results.items():
+        console.print(f"  {key}: {value}")
+    console.print(
+        f"  accounts: {counts.get('twitter_accounts', 0)}, "
+        f"tweets: {counts.get('tweets', 0)}, "
+        f"entities: {counts.get('tweet_entities', 0)}"
+    )
+    store.close()
+
+
 @sync_app.command("all")
 def sync_all(
     config: str | None = typer.Option(None, "--config", "-c"),
@@ -178,8 +233,14 @@ def sync_all(
     dbt: bool = typer.Option(
         True, "--dbt/--no-dbt", help="Run dbt build + test after Python sync"
     ),
+    wallets: bool = typer.Option(
+        True, "--wallets/--no-wallets", help="Run wallet intelligence sync"
+    ),
+    tweets: bool = typer.Option(
+        True, "--tweets/--no-tweets", help="Run tweet import sync"
+    ),
 ) -> None:
-    """Sync everything: universe + daily + hourly + OI + macro + dbt + status.
+    """Sync everything: universe + daily + hourly + OI + macro + wallets + tweets + dbt.
 
     One command to bring the local DB up to today. Runs:
     1. Universe refresh (top-cap rankings + exchange pair probes)
@@ -187,8 +248,10 @@ def sync_all(
     3. Hourly tail-refresh (top-N assets)
     4. Open interest tail-refresh (Binance + Bybit + OKX, per config toggles)
     5. Macro sync (FRED series, if FRED_API_KEY is set)
-    6. dbt build + test (transforms raw -> staging/marts/signals/events)
-    7. Status table
+    6. Wallet intelligence sync (registry + history + tail)
+    7. Tweet import sync (inbox CSV/JSONL)
+    8. dbt build + test (transforms raw -> staging/marts/signals/events)
+    9. Status table
     """
     store, cfg = _load(config)
     syncer = MarketSync(store, cfg)
@@ -237,7 +300,32 @@ def sync_all(
 
     asyncio.run(run())
 
-    # 6. dbt build + test
+    # 6. Wallet intelligence
+    if wallets and cfg.wallet_tracking.enabled:
+        console.print("\n[dim]Wallet intelligence...[/dim]")
+        wallet_syncer = WalletSync(store, cfg)
+
+        async def run_wallets() -> dict[str, int]:
+            try:
+                return await wallet_syncer.sync_all(full=False, tail=True)
+            finally:
+                await wallet_syncer.close()
+
+        wallet_results = asyncio.run(run_wallets())
+        console.print(
+            f"[green]Wallets: {sum(wallet_results.values())} operations[/green]"
+        )
+
+    # 7. Tweet import
+    if tweets and cfg.twitter_tracking.enabled:
+        console.print("\n[dim]Tweet import...[/dim]")
+        tweet_syncer = TwitterSync(store, cfg)
+        tweet_results = tweet_syncer.sync_all()
+        console.print(
+            f"[green]Tweets: {tweet_results.get('imported', 0)} imported[/green]"
+        )
+
+    # 8. dbt build + test
     if dbt:
         console.print("\n[dim]dbt build...[/dim]")
         dbt_ok = _run_dbt("build")
@@ -246,7 +334,7 @@ def sync_all(
         else:
             console.print("[yellow]dbt build: skipped or failed[/yellow]")
 
-    # 7. Status
+    # 9. Status
     console.print()
     table = Table(title="ccquant data status")
     for col in [
@@ -327,6 +415,18 @@ def _export(config: str | None, out: Path, *, fmt: str) -> None:
             "open_interest",
             "macro_series",
             "macro_sync_state",
+            "wallet_registry",
+            "wallet_transfers",
+            "wallet_positions_daily",
+            "wallet_sync_state",
+            "wallet_signals_daily",
+            "wallet_alerts",
+            "twitter_accounts",
+            "tweets",
+            "tweet_entities",
+            "tweet_sync_state",
+            "tweet_signals_daily",
+            "tweet_alerts",
         ]:
             path = store.export_table(table, out, fmt=fmt)
             console.print(f"[green]wrote[/green] {path}")
@@ -365,6 +465,281 @@ def db_backup(
     try:
         path = store.backup(dest, keep=keep)
         console.print(f"[green]Backup created:[/green] {path}")
+    finally:
+        store.close()
+
+
+@wallet_app.command("discover")
+def wallet_discover(
+    config: str | None = typer.Option(None, "--config", "-c"),
+    chain: str = typer.Option("solana", "--chain", help="solana, arbitrum, ethereum"),
+    top: int = typer.Option(20, "--top", help="Number of wallets to discover"),
+) -> None:
+    """Discover labeled wallets from Flipside (or heuristic fallback)."""
+    store, cfg = _load(config)
+    syncer = WalletSync(store, cfg)
+
+    async def run() -> int:
+        try:
+            return await syncer.discover(chain=chain.lower(), top=top)
+        finally:
+            await syncer.close()
+            store.close()
+
+    count = asyncio.run(run())
+    console.print(f"[green]Discovered {count} wallets on {chain}[/green]")
+
+
+@wallet_app.command("import-extract")
+def wallet_import_extract(
+    config: str | None = typer.Option(None, "--config", "-c"),
+    source: str = typer.Option(
+        "solarchive",
+        "--source",
+        help="solarchive or bigquery",
+    ),
+    partition_date: str | None = typer.Option(
+        None, "--date", help="Partition date YYYY-MM-DD for solarchive"
+    ),
+    parquet: Annotated[
+        Path | None,
+        typer.Option("--parquet", help="Local parquet path override"),
+    ] = None,
+) -> None:
+    """Import a bounded open extract into wallet_transfers."""
+    from datetime import date as date_type
+
+    store, cfg = _load(config)
+    syncer = WalletSync(store, cfg)
+    parsed_date = (
+        date_type.fromisoformat(partition_date) if partition_date else None
+    )
+
+    async def run() -> int:
+        try:
+            await syncer.load_registry()
+            return await syncer.import_extract(
+                source=source,
+                partition_date=parsed_date,
+                parquet_path=parquet,
+            )
+        finally:
+            await syncer.close()
+
+    try:
+        count = asyncio.run(run())
+    except Exception as exc:
+        from ccquant.wallet.extract_solarchive import SolArchivePartitionNotFoundError
+
+        if isinstance(exc, SolArchivePartitionNotFoundError):
+            console.print(f"[yellow]{exc}[/yellow]")
+            raise typer.Exit(code=1) from exc
+        raise
+    finally:
+        store.close()
+
+    console.print(f"[green]Imported {count} transfer rows from {source}[/green]")
+
+
+@wallet_app.command("resolve-sns")
+def wallet_resolve_sns(
+    domain: str = typer.Argument(..., help="SNS domain, e.g. mitch.sol"),
+) -> None:
+    """Resolve a .sol SNS domain to a wallet address."""
+    from ccquant.wallet.discovery import resolve_sns_domain
+
+    async def run() -> str | None:
+        async with httpx.AsyncClient() as client:
+            return await resolve_sns_domain(client, domain)
+
+    address = asyncio.run(run())
+    if address:
+        console.print(f"[green]{domain}[/green] -> {address}")
+    else:
+        console.print(f"[yellow]Could not resolve {domain}[/yellow]")
+
+
+@wallet_app.command("match-holder")
+def wallet_match_holder(
+    mint: str = typer.Option(..., "--mint", help="Token mint address"),
+    amount: float = typer.Option(..., "--amount", help="Exact holder balance"),
+    holder: str = typer.Option(
+        "",
+        "--holder",
+        help="Optional known holder address to verify",
+    ),
+) -> None:
+    """Match a holder balance (screenshot trick) against a candidate address."""
+    from ccquant.wallet.discovery import match_holder_amount
+
+    holders = [(holder, amount)] if holder else [("candidate", amount)]
+    matched = match_holder_amount(holders, target_amount=amount)
+    if matched:
+        console.print(f"[green]Matched holder:[/green] {matched}")
+    else:
+        console.print("[yellow]No holder matched the target amount[/yellow]")
+
+
+@wallet_app.command("alerts")
+def wallet_alerts(
+    config: str | None = typer.Option(None, "--config", "-c"),
+    since_hours: int = typer.Option(1, "--since", help="Hours to look back"),
+) -> None:
+    """Show recent wallet alerts from the local database."""
+    from datetime import UTC, datetime, timedelta
+
+    store, _cfg = _load(config)
+    try:
+        since = datetime.now(tz=UTC) - timedelta(hours=since_hours)
+        alerts = store.wallet_alerts_since(since)
+        if not alerts:
+            console.print("[yellow]No alerts in the requested window[/yellow]")
+            return
+        table = Table(title=f"Wallet alerts (last {since_hours}h)")
+        for col in ["time", "chain", "address", "action", "severity", "tx"]:
+            table.add_column(col)
+        for alert in alerts:
+            table.add_row(
+                alert.block_time.isoformat(),
+                alert.chain,
+                alert.address[:12] + "...",
+                alert.action,
+                alert.severity,
+                alert.tx_hash[:12] + "...",
+            )
+        console.print(table)
+    finally:
+        store.close()
+
+
+@twitter_app.command("import")
+def twitter_import(
+    file: Annotated[Path, typer.Argument(help="CSV or JSONL file to import")],
+    config: str | None = typer.Option(None, "--config", "-c"),
+) -> None:
+    """Import a single tweet export file."""
+    store, cfg = _load(config)
+    syncer = TwitterSync(store, cfg)
+    syncer.load_accounts()
+    count = syncer.import_file(file)
+    syncer.enrich_recent_tweets()
+    syncer.aggregate_signals()
+    syncer.detect_and_store_alerts()
+    console.print(f"[green]Imported {count} tweets from {file}[/green]")
+    store.close()
+
+
+accounts_app = typer.Typer(help="Manage twitter watchlist accounts")
+twitter_app.add_typer(accounts_app, name="accounts")
+
+
+@accounts_app.command("list")
+def twitter_accounts_list(
+    config: str | None = typer.Option(None, "--config", "-c"),
+) -> None:
+    """List active twitter accounts."""
+    store, _cfg = _load(config)
+    try:
+        accounts = store.active_twitter_accounts()
+        table = Table(title="Active twitter accounts")
+        for col in ["handle", "type", "chains", "source", "confidence"]:
+            table.add_column(col)
+        for account in accounts:
+            table.add_row(
+                account.handle,
+                account.entity_type,
+                account.chains,
+                account.source,
+                f"{account.confidence:.2f}",
+            )
+        console.print(table)
+    finally:
+        store.close()
+
+
+@accounts_app.command("add")
+def twitter_accounts_add(
+    handle: str = typer.Argument(..., help="Twitter handle without @"),
+    config: str | None = typer.Option(None, "--config", "-c"),
+    entity_type: str = typer.Option("trader", "--type", help="kol, trader, etc."),
+    display_name: str = typer.Option("", "--name", help="Display name"),
+) -> None:
+    """Add an account to the watchlist."""
+    store, cfg = _load(config)
+    syncer = TwitterSync(store, cfg)
+    count = syncer.add_account(
+        handle, entity_type=entity_type, display_name=display_name
+    )
+    console.print(f"[green]Added/updated {count} account(s)[/green]")
+    store.close()
+
+
+@accounts_app.command("promote")
+def twitter_accounts_promote(
+    handle: str = typer.Argument(..., help="Discovered handle to promote"),
+    config: str | None = typer.Option(None, "--config", "-c"),
+) -> None:
+    """Promote a discovered account to active watchlist."""
+    store, cfg = _load(config)
+    syncer = TwitterSync(store, cfg)
+    if syncer.promote_account(handle):
+        console.print(f"[green]Promoted {handle} to active[/green]")
+    else:
+        console.print(f"[yellow]Handle not found: {handle}[/yellow]")
+    store.close()
+
+
+@twitter_app.command("review")
+def twitter_review(
+    config: str | None = typer.Option(None, "--config", "-c"),
+) -> None:
+    """List discovered handles pending review."""
+    store, _cfg = _load(config)
+    try:
+        accounts = store.discovered_twitter_accounts()
+        if not accounts:
+            console.print("[yellow]No discovered accounts pending review[/yellow]")
+            return
+        table = Table(title="Discovered twitter accounts (inactive)")
+        for col in ["handle", "type", "source"]:
+            table.add_column(col)
+        for account in accounts:
+            table.add_row(account.handle, account.entity_type, account.source)
+        console.print(table)
+        console.print(
+            "[dim]Promote with: ccquant twitter accounts promote HANDLE[/dim]"
+        )
+    finally:
+        store.close()
+
+
+@twitter_app.command("alerts")
+def twitter_alerts(
+    config: str | None = typer.Option(None, "--config", "-c"),
+    since_hours: int = typer.Option(24, "--since", help="Hours to look back"),
+) -> None:
+    """Show recent tweet alerts from imported data."""
+    from datetime import UTC, datetime, timedelta
+
+    store, _cfg = _load(config)
+    try:
+        since = datetime.now(tz=UTC) - timedelta(hours=since_hours)
+        alerts = store.tweet_alerts_since(since)
+        if not alerts:
+            console.print("[yellow]No tweet alerts in the requested window[/yellow]")
+            return
+        table = Table(title=f"Tweet alerts (last {since_hours}h)")
+        for col in ["time", "handle", "type", "severity", "symbols"]:
+            table.add_column(col)
+        for alert in alerts:
+            table.add_row(
+                alert.posted_at.isoformat(),
+                alert.handle,
+                alert.alert_type,
+                alert.severity,
+                alert.symbols,
+            )
+        console.print(table)
     finally:
         store.close()
 

@@ -9,7 +9,19 @@ statistical, ML, and foundation-model experiments.
 ## Quickstart
 
 ```bash
+# Full local install (simplest — all extras + dependency groups)
+uv sync --all-extras --all-groups
+
+# Or pick tiers explicitly:
+# CLI + tests only
 uv sync --extra dev
+
+# Notebooks (BTC, Macro, OnChain_BTC, Wallet_SOL)
+uv sync --extra dev --extra notebook --extra forecast
+
+# Full pipeline incl. dbt + wallet/BigQuery (same as --all-extras --all-groups)
+uv sync --extra dev --extra notebook --extra forecast --extra dbt --extra wallet
+
 uv run ccquant sync all                     # one-command update: universe + daily + hourly + status
 uv run ccquant sync universe --size 100
 uv run ccquant sync backfill --interval 1d
@@ -57,6 +69,8 @@ Keep data ingestion deterministic and boring. Add models in layers:
 
 Three research notebooks in `notebooks/` — each runs top-to-bottom, loads `.env`
 for API keys, and degrades gracefully to synthetic data when keys are absent.
+Install notebook deps first: `uv sync --extra notebook --extra forecast`
+(or `uv sync --all-extras --all-groups` for everything).
 
 ### BTC Long-Term Price Forecast (`BTC.ipynb`)
 

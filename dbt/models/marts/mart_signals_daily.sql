@@ -38,7 +38,15 @@ select
   m.vixcls,
   e.event_count,
   e.has_positive_event,
-  e.has_negative_event
+  e.has_negative_event,
+  ws.smart_money_netflow_usd,
+  ws.kol_buy_count,
+  ws.deployer_activity_count,
+  ws.cabal_alert_count,
+  ws.top_wallet_accumulation_score,
+  tw.tweet_mention_count,
+  tw.kol_tweet_mention_count,
+  tw.tweet_sentiment_net
 from {{ ref('fct_ohlcv_daily') }} p
 left join {{ ref('fct_open_interest_agg') }} oi_agg
   on p.symbol = oi_agg.symbol
@@ -59,5 +67,14 @@ left join (
   from {{ ref('dim_events') }}
   group by cast(date as date)
 ) e on p.date = e.event_date
+left join {{ ref('fct_wallet_signals_daily') }} ws
+  on p.date = ws.date
+  and (
+    (p.symbol = 'SOL' and ws.chain = 'solana')
+    or (p.symbol = 'ETH' and ws.chain = 'arbitrum')
+  )
+left join {{ ref('fct_tweet_mentions_daily') }} tw
+  on p.symbol = tw.symbol
+  and p.date = tw.date
 where p.symbol in (select symbol from {{ ref('dim_assets') }})
 order by p.symbol, p.date

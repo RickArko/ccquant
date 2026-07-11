@@ -110,3 +110,114 @@ sources:
           - name: source
           - name: latest_at
           - name: last_refresh_at
+
+      - name: twitter_accounts
+        description: >
+          Curated crypto twitter watchlist. Grain: handle.
+        columns:
+          - name: handle
+          - name: entity_type
+          - name: active
+
+      - name: tweets
+        description: >
+          Normalized tweets from CSV/JSONL imports. Grain: tweet_id.
+        columns:
+          - name: tweet_id
+          - name: handle
+          - name: posted_at
+          - name: text
+
+      - name: tweet_entities
+        description: >
+          Extracted cashtags, addresses, urls. Grain: tweet_id x entity.
+        columns:
+          - name: tweet_id
+          - name: entity_type
+          - name: entity_value
+
+      - name: tweet_signals_daily
+        description: >
+          Pre-aggregated tweet mention signals per symbol/day.
+        columns:
+          - name: date
+          - name: symbol
+          - name: mention_count
+
+      - name: tweet_alerts
+        description: >
+          Batch-detected high-signal tweet events.
+        columns:
+          - name: tweet_id
+          - name: alert_type
+          - name: posted_at
+
+      - name: wallet_registry
+        description: >
+          Curated and discovered wallet addresses with labels and provenance.
+          Grain: address x chain.
+        columns:
+          - name: address
+          - name: chain
+          - name: label
+          - name: entity_type
+          - name: confidence
+          - name: source
+          - name: active
+
+      - name: wallet_transfers
+        description: >
+          Normalized wallet transfer events across Solana and Arbitrum.
+          Grain: chain x tx_hash x transfer_index x from x to x mint.
+        columns:
+          - name: chain
+          - name: tx_hash
+          - name: block_time
+          - name: from_address
+          - name: to_address
+          - name: asset_mint_or_contract
+          - name: direction
+          - name: source
+
+      - name: wallet_positions_daily
+        description: >
+          End-of-day wallet position snapshots. Grain: address x chain x date x mint.
+        columns:
+          - name: address
+          - name: chain
+          - name: date
+          - name: asset_mint
+          - name: balance
+
+      - name: wallet_sync_state
+        description: >
+          Per-wallet sync cursors for history and tail refresh.
+          Grain: address x chain x source.
+        columns:
+          - name: address
+          - name: chain
+          - name: source
+          - name: backfill_complete
+          - name: latest_at
+
+      - name: wallet_signals_daily
+        description: >
+          Pre-aggregated wallet flow signals by date and chain.
+          Grain: date x chain.
+        columns:
+          - name: date
+          - name: chain
+          - name: smart_money_netflow_usd
+          - name: kol_buy_count
+          - name: cabal_alert_count
+
+      - name: wallet_alerts
+        description: >
+          Generated wallet alert events for monitoring.
+          Grain: address x chain x tx_hash x action.
+        columns:
+          - name: address
+          - name: chain
+          - name: action
+          - name: severity
+          - name: block_time

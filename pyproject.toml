@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
   "duckdb>=1.2.2",
   "httpx>=0.28.1",
+  "numpy>=2.2.0",
   "polars>=1.30.0",
   "pyarrow>=24.0.0",
   "python-dotenv>=1.0.0",
@@ -35,11 +36,15 @@ forecast = [
 notebook = [
   "ipykernel>=6.29.5",
   "jupyterlab>=4.3.0",
+  "numpy>=2.2.0",
   "plotly>=6.0.0",
 ]
 dbt = [
   "dbt-core>=1.10",
   "dbt-duckdb>=1.10",
+]
+wallet = [
+  "google-cloud-bigquery>=3.25.0",
 ]
 
 [build-system]

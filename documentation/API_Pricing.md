@@ -21,6 +21,7 @@ pricing tiers, free-tier limits, key setup, and a recommended v1 stack.
 | **bitcoinisdata.com** | On-chain valuation (MVRV, NUPL, realized price) | Free sample (~15d) | `BITCOIN_IS_DATA_KEY` (paid) | **Use** (renew sub for full history) |
 | **Glassnode** | Premium valuation (SOPR, RHODL, exchange balance) | Display-only | `GLASSNODE_API_KEY` (Pro tier) | Optional (synthetic fallback otherwise) |
 | CryptoQuant | Exchange flows, SOPR, MVRV | Free charts, paid API | `CRYPTOQUANT_API_KEY` | Future v2 (exchange flows) |
+| **X / Twitter** | KOL/trader tweet tracking | Import-only v1 ($0) | `X_API_BEARER_TOKEN` (Phase 2+) | **Use** CSV/JSONL import |
 | Bitcoin Magazine Pro | Puell, MVRV Z-Score, RHODL | Display-only | No API | Reference only (no programmatic access) |
 
 ---
@@ -253,6 +254,57 @@ Charts for Puell Multiple, MVRV Z-Score, RHODL, Reserve Risk, SOPR.
 
 ---
 
+### Wallet intelligence data sources (v1 — $0 stack)
+
+Used by `ccquant sync wallets` and `Wallet_SOL.ipynb`.
+
+| Source | Role | Free? | Key? | V1 recommendation |
+|---|---|---|---|---|
+| **SolArchive** | Solana historical Parquet partitions | Free (CC-BY-4.0) | No | **Use** for bounded history backfill |
+| **BigQuery public** | Solana + Arbitrum SQL extracts | Free (1 TB/mo) | GCP creds optional | **Use** with `uv sync --extra wallet` |
+| **Flipside** | Wallet labels (`dim_labels`) | Free tier | `FLIPSIDE_API_KEY` | **Use** for discovery |
+| **Solana public RPC** | Tail refresh (`getSignaturesForAddress`) | Free | No | **Smoke test only** — `429` at 50 wallets; use dedicated RPC for tail |
+| **camp** | Arbitrum tail REST API | Free | No | **Use** (rolling ~30d window) |
+| **Etherscan** | ETH/Arbitrum ERC-20 tail | Free (100k calls/day) | `ETHERSCAN_API_KEY` | Optional |
+| **Helius** | Solana archival `getTransactionsForAddress` | Paid ($49+/mo) | API key | Upgrade path |
+| **Nansen / Arkham** | Institutional smart-money labels | Paid ($100–800+/mo) | API key | Manual seeding only |
+
+**Open extract testing protocol:**
+
+1. Load seed registry from `config/seeds/wallet_registry_seed.csv`
+2. Import one partition: `uv run ccquant wallet import-extract --source solarchive --date YYYY-MM-DD`
+3. Or local parquet: `uv run ccquant wallet import-extract --source solarchive --parquet PATH`
+4. Re-run to verify idempotent upserts before scaling `extract_days`
+
+**Rollback:** `uv run ccquant db backup` before large extracts; restore file copy to roll back.
+
+---
+
+### X / Twitter — crypto KOL/trader tweet tracking
+
+Used by `ccquant sync tweets` for social signal enrichment. **v1 is import-only**
+($0) — drop CSV/JSONL exports into `data/twitter/inbox/`. See
+[`Twitter_Import.md`](Twitter_Import.md).
+
+| Tier | Price | Use case | V1 recommendation |
+|---|---|---|---|
+| **CSV/JSONL import** | **$0** | Manual exports, saved archives | **Use** (primary v1) |
+| Pay-per-use API | ~$0.005/post read | Live 15-min tail for ≤50 accounts | Phase 2+ (~$2–5/mo) |
+| Basic (legacy) | $200/mo | Fixed monthly cap | Not for new signups |
+| Enterprise | $42k+/mo | Full firehose | Not needed |
+
+- **Key setup (Phase 2+ only):**
+  1. Register at [developer.x.com](https://developer.x.com)
+  2. Create app with pay-per-use billing + spending cap
+  3. Set in `.env`: `X_API_BEARER_TOKEN=your_token`
+- **v1 workflow:** Export tweets externally → `data/twitter/inbox/` →
+  `uv run ccquant sync tweets`
+- **Notes:** X discontinued meaningful free read access (Feb 2026). ccquant
+  does not ship scrapers; external export tools only. Daily deduplication on
+  the API means tail refresh cost is lower than raw per-post pricing.
+
+---
+
 ## .env key reference
 
 All keys are loaded via `python-dotenv` from the project root `.env` file.
@@ -271,6 +323,11 @@ cp .env.example .env
 | `BID_CSV_PATH` | bitcoinisdata.com | — | OnChain_BTC.ipynb (CSV download path) |
 | `GLASSNODE_API_KEY` | Glassnode | Paid ($799+/mo) | OnChain_BTC.ipynb (SOPR/RHODL/exch bal) |
 | `CRYPTOQUANT_API_KEY` | CryptoQuant | Paid ($29+/mo) | Future v2 (exchange flows) |
+| `FLIPSIDE_API_KEY` | Flipside | Free tier | `ccquant wallet discover` |
+| `ETHERSCAN_API_KEY` | Etherscan | Free | Optional Arbitrum/ETH tail |
+| `TELEGRAM_BOT_TOKEN` | Telegram | Free | Optional wallet/tweet alerts |
+| `TELEGRAM_CHAT_ID` | Telegram | Free | Optional alert destination chat |
+| `X_API_BEARER_TOKEN` | X / Twitter | Pay-per-use | Phase 2+ live tweet tail (not v1) |
 | `CCQUANT_DB` | — | — | Override OHLCV DuckDB path |
 | `CCQUANT_ONCHAIN_DB` | — | — | Override on-chain DuckDB path |
 
@@ -294,6 +351,18 @@ terms of service:
 | blockchain.info | 1s spacing, 12h staleness gate, sequential, 429-retry |
 | bitcoinisdata.com | API: sequential, cached in DuckDB; CSV: one-time download |
 | Glassnode | 6s spacing, 12h staleness gate, 50 calls/day cap (Light API) |
+| Solana public RPC | 1 req/s per wallet; max 50 wallets in tail config |
+| Flipside | Cache labels in DuckDB; refresh weekly not hourly |
+| SolArchive | Download single-day partitions only; filter to seed wallets |
+| Twitter import | Idempotent on `tweet_id`; inbox files archived after import |
+
+## Tweet tracking rollback
+
+```bash
+uv run ccquant db backup
+# restore: cp data/backups/ccquant-YYYYMMDD-HHMMSS.duckdb data/ccquant.duckdb
+uv run dbt run --select tag:twitter --full-refresh --project-dir dbt --profiles-dir dbt
+```
 
 All on-chain data is cached in a local DuckDB store (`data/onchain.duckdb`) with
 incremental refresh — re-running the notebook only hits the network for stale

@@ -36,4 +36,39 @@ macro:
     - DTWEXBGS
     - VIXCLS
   request_delay_seconds: 1.0
+wallet_tracking:
+  enabled: true
+  chains:
+    - solana
+    - arbitrum
+  seed_file: config/seeds/wallet_registry_seed.csv
+  history:
+    solana_source: solarchive
+    extract_days: 7
+  tail:
+    enabled: true
+    interval_minutes: 15
+    max_wallets: 50
+    request_delay_seconds: 1.0
+    solana_rpc_url: https://api.mainnet-beta.solana.com
+  discovery:
+    flipside_enabled: true
+    min_win_rate: 0.35
+    request_delay_seconds: 1.0
+twitter_tracking:
+  enabled: true
+  accounts_seed: config/seeds/twitter_accounts_seed.csv
+  import:
+    inbox_dir: data/twitter/inbox
+    archive_dir: data/twitter/archive
+    formats: [csv, jsonl]
+    on_conflict: skip
+  enrichment:
+    extract_cashtags: true
+    extract_addresses: true
+    extract_sol_domains: true
+    keyword_sentiment: true
+  signals:
+    spike_window_days: 30
+    spike_z_threshold: 2.0
 

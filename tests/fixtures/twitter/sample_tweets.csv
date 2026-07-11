@@ -1,0 +1,121 @@
+tweet_id,handle,posted_at,text,like_count,retweet_count,reply_count,is_retweet,is_reply
+1000000000000000000,ansem,2025-06-01T12:00:00Z,"Long $SOL here, looking strong",10,2,0,false,false
+1000000000000000001,cryptohayes,2025-06-01T13:00:00Z,"Buying $BTC dip, accumulation zone",11,3,1,false,false
+1000000000000000002,lookonchain,2025-06-01T14:00:00Z,Whale moved 10k $ETH to exchange,12,4,2,false,false
+1000000000000000003,ansem,2025-06-01T15:00:00Z,"Bearish on $DOGE short term, dump incoming",13,5,3,false,false
+1000000000000000004,cryptohayes,2025-06-01T16:00:00Z,New token $WIF pumping hard,14,6,4,false,false
+1000000000000000005,lookonchain,2025-06-01T17:00:00Z,Accumulating $SOL under 150,15,7,0,false,false
+1000000000000000006,ansem,2025-06-01T18:00:00Z,"Rug risk on new memecoin, be careful",16,8,1,false,false
+1000000000000000007,cryptohayes,2025-06-01T19:00:00Z,mynode.sol just registered,17,9,2,false,false
+1000000000000000008,lookonchain,2025-06-01T20:00:00Z,Address FoKTT3dKz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8 accumulating,18,10,3,false,false
+1000000000000000009,ansem,2025-06-01T21:00:00Z,0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb moving funds,19,11,4,false,false
+1000000000000000010,cryptohayes,2025-06-01T22:00:00Z,"Long $SOL here, looking strong",20,12,0,false,false
+1000000000000000011,lookonchain,2025-06-01T23:00:00Z,"Buying $BTC dip, accumulation zone",21,13,1,false,false
+1000000000000000012,ansem,2025-06-02T00:00:00Z,Whale moved 10k $ETH to exchange,22,14,2,false,false
+1000000000000000013,cryptohayes,2025-06-02T01:00:00Z,"Bearish on $DOGE short term, dump incoming",23,15,3,false,false
+1000000000000000014,lookonchain,2025-06-02T02:00:00Z,New token $WIF pumping hard,24,16,4,false,false
+1000000000000000015,ansem,2025-06-02T03:00:00Z,Accumulating $SOL under 150,25,17,0,false,false
+1000000000000000016,cryptohayes,2025-06-02T04:00:00Z,"Rug risk on new memecoin, be careful",26,18,1,false,false
+1000000000000000017,lookonchain,2025-06-02T05:00:00Z,mynode.sol just registered,27,19,2,false,false
+1000000000000000018,ansem,2025-06-02T06:00:00Z,Address FoKTT3dKz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8 accumulating,28,20,3,false,false
+1000000000000000019,cryptohayes,2025-06-02T07:00:00Z,0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb moving funds,29,21,4,false,false
+1000000000000000020,lookonchain,2025-06-02T08:00:00Z,"Long $SOL here, looking strong",30,2,0,false,false
+1000000000000000021,ansem,2025-06-02T09:00:00Z,"Buying $BTC dip, accumulation zone",31,3,1,false,false
+1000000000000000022,cryptohayes,2025-06-02T10:00:00Z,Whale moved 10k $ETH to exchange,32,4,2,false,false
+1000000000000000023,lookonchain,2025-06-02T11:00:00Z,"Bearish on $DOGE short term, dump incoming",33,5,3,false,false
+1000000000000000024,ansem,2025-06-02T12:00:00Z,New token $WIF pumping hard,34,6,4,false,false
+1000000000000000025,cryptohayes,2025-06-02T13:00:00Z,Accumulating $SOL under 150,35,7,0,false,false
+1000000000000000026,lookonchain,2025-06-02T14:00:00Z,"Rug risk on new memecoin, be careful",36,8,1,false,false
+1000000000000000027,ansem,2025-06-02T15:00:00Z,mynode.sol just registered,37,9,2,false,false
+1000000000000000028,cryptohayes,2025-06-02T16:00:00Z,Address FoKTT3dKz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8 accumulating,38,10,3,false,false
+1000000000000000029,lookonchain,2025-06-02T17:00:00Z,0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb moving funds,39,11,4,false,false
+1000000000000000030,ansem,2025-06-02T18:00:00Z,"Long $SOL here, looking strong",40,12,0,false,false
+1000000000000000031,cryptohayes,2025-06-02T19:00:00Z,"Buying $BTC dip, accumulation zone",41,13,1,false,false
+1000000000000000032,lookonchain,2025-06-02T20:00:00Z,Whale moved 10k $ETH to exchange,42,14,2,false,false
+1000000000000000033,ansem,2025-06-02T21:00:00Z,"Bearish on $DOGE short term, dump incoming",43,15,3,false,false
+1000000000000000034,cryptohayes,2025-06-02T22:00:00Z,New token $WIF pumping hard,44,16,4,false,false
+1000000000000000035,lookonchain,2025-06-02T23:00:00Z,Accumulating $SOL under 150,45,17,0,false,false
+1000000000000000036,ansem,2025-06-03T00:00:00Z,"Rug risk on new memecoin, be careful",46,18,1,false,false
+1000000000000000037,cryptohayes,2025-06-03T01:00:00Z,mynode.sol just registered,47,19,2,false,false
+1000000000000000038,lookonchain,2025-06-03T02:00:00Z,Address FoKTT3dKz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8 accumulating,48,20,3,false,false
+1000000000000000039,ansem,2025-06-03T03:00:00Z,0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb moving funds,49,21,4,false,false
+1000000000000000040,cryptohayes,2025-06-03T04:00:00Z,"Long $SOL here, looking strong",50,2,0,false,false
+1000000000000000041,lookonchain,2025-06-03T05:00:00Z,"Buying $BTC dip, accumulation zone",51,3,1,false,false
+1000000000000000042,ansem,2025-06-03T06:00:00Z,Whale moved 10k $ETH to exchange,52,4,2,false,false
+1000000000000000043,cryptohayes,2025-06-03T07:00:00Z,"Bearish on $DOGE short term, dump incoming",53,5,3,false,false
+1000000000000000044,lookonchain,2025-06-03T08:00:00Z,New token $WIF pumping hard,54,6,4,false,false
+1000000000000000045,ansem,2025-06-03T09:00:00Z,Accumulating $SOL under 150,55,7,0,false,false
+1000000000000000046,cryptohayes,2025-06-03T10:00:00Z,"Rug risk on new memecoin, be careful",56,8,1,false,false
+1000000000000000047,lookonchain,2025-06-03T11:00:00Z,mynode.sol just registered,57,9,2,false,false
+1000000000000000048,ansem,2025-06-03T12:00:00Z,Address FoKTT3dKz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8 accumulating,58,10,3,false,false
+1000000000000000049,cryptohayes,2025-06-03T13:00:00Z,0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb moving funds,59,11,4,false,false
+1000000000000000050,lookonchain,2025-06-03T14:00:00Z,"Long $SOL here, looking strong",10,12,0,false,false
+1000000000000000051,ansem,2025-06-03T15:00:00Z,"Buying $BTC dip, accumulation zone",11,13,1,false,false
+1000000000000000052,cryptohayes,2025-06-03T16:00:00Z,Whale moved 10k $ETH to exchange,12,14,2,false,false
+1000000000000000053,lookonchain,2025-06-03T17:00:00Z,"Bearish on $DOGE short term, dump incoming",13,15,3,false,false
+1000000000000000054,ansem,2025-06-03T18:00:00Z,New token $WIF pumping hard,14,16,4,false,false
+1000000000000000055,cryptohayes,2025-06-03T19:00:00Z,Accumulating $SOL under 150,15,17,0,false,false
+1000000000000000056,lookonchain,2025-06-03T20:00:00Z,"Rug risk on new memecoin, be careful",16,18,1,false,false
+1000000000000000057,ansem,2025-06-03T21:00:00Z,mynode.sol just registered,17,19,2,false,false
+1000000000000000058,cryptohayes,2025-06-03T22:00:00Z,Address FoKTT3dKz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8 accumulating,18,20,3,false,false
+1000000000000000059,lookonchain,2025-06-03T23:00:00Z,0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb moving funds,19,21,4,false,false
+1000000000000000060,ansem,2025-06-04T00:00:00Z,"Long $SOL here, looking strong",20,2,0,false,false
+1000000000000000061,cryptohayes,2025-06-04T01:00:00Z,"Buying $BTC dip, accumulation zone",21,3,1,false,false
+1000000000000000062,lookonchain,2025-06-04T02:00:00Z,Whale moved 10k $ETH to exchange,22,4,2,false,false
+1000000000000000063,ansem,2025-06-04T03:00:00Z,"Bearish on $DOGE short term, dump incoming",23,5,3,false,false
+1000000000000000064,cryptohayes,2025-06-04T04:00:00Z,New token $WIF pumping hard,24,6,4,false,false
+1000000000000000065,lookonchain,2025-06-04T05:00:00Z,Accumulating $SOL under 150,25,7,0,false,false
+1000000000000000066,ansem,2025-06-04T06:00:00Z,"Rug risk on new memecoin, be careful",26,8,1,false,false
+1000000000000000067,cryptohayes,2025-06-04T07:00:00Z,mynode.sol just registered,27,9,2,false,false
+1000000000000000068,lookonchain,2025-06-04T08:00:00Z,Address FoKTT3dKz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8 accumulating,28,10,3,false,false
+1000000000000000069,ansem,2025-06-04T09:00:00Z,0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb moving funds,29,11,4,false,false
+1000000000000000070,cryptohayes,2025-06-04T10:00:00Z,"Long $SOL here, looking strong",30,12,0,false,false
+1000000000000000071,lookonchain,2025-06-04T11:00:00Z,"Buying $BTC dip, accumulation zone",31,13,1,false,false
+1000000000000000072,ansem,2025-06-04T12:00:00Z,Whale moved 10k $ETH to exchange,32,14,2,false,false
+1000000000000000073,cryptohayes,2025-06-04T13:00:00Z,"Bearish on $DOGE short term, dump incoming",33,15,3,false,false
+1000000000000000074,lookonchain,2025-06-04T14:00:00Z,New token $WIF pumping hard,34,16,4,false,false
+1000000000000000075,ansem,2025-06-04T15:00:00Z,Accumulating $SOL under 150,35,17,0,false,false
+1000000000000000076,cryptohayes,2025-06-04T16:00:00Z,"Rug risk on new memecoin, be careful",36,18,1,false,false
+1000000000000000077,lookonchain,2025-06-04T17:00:00Z,mynode.sol just registered,37,19,2,false,false
+1000000000000000078,ansem,2025-06-04T18:00:00Z,Address FoKTT3dKz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8 accumulating,38,20,3,false,false
+1000000000000000079,cryptohayes,2025-06-04T19:00:00Z,0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb moving funds,39,21,4,false,false
+1000000000000000080,lookonchain,2025-06-04T20:00:00Z,"Long $SOL here, looking strong",40,2,0,false,false
+1000000000000000081,ansem,2025-06-04T21:00:00Z,"Buying $BTC dip, accumulation zone",41,3,1,false,false
+1000000000000000082,cryptohayes,2025-06-04T22:00:00Z,Whale moved 10k $ETH to exchange,42,4,2,false,false
+1000000000000000083,lookonchain,2025-06-04T23:00:00Z,"Bearish on $DOGE short term, dump incoming",43,5,3,false,false
+1000000000000000084,ansem,2025-06-05T00:00:00Z,New token $WIF pumping hard,44,6,4,false,false
+1000000000000000085,cryptohayes,2025-06-05T01:00:00Z,Accumulating $SOL under 150,45,7,0,false,false
+1000000000000000086,lookonchain,2025-06-05T02:00:00Z,"Rug risk on new memecoin, be careful",46,8,1,false,false
+1000000000000000087,ansem,2025-06-05T03:00:00Z,mynode.sol just registered,47,9,2,false,false
+1000000000000000088,cryptohayes,2025-06-05T04:00:00Z,Address FoKTT3dKz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8 accumulating,48,10,3,false,false
+1000000000000000089,lookonchain,2025-06-05T05:00:00Z,0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb moving funds,49,11,4,false,false
+1000000000000000090,ansem,2025-06-05T06:00:00Z,"Long $SOL here, looking strong",50,12,0,false,false
+1000000000000000091,cryptohayes,2025-06-05T07:00:00Z,"Buying $BTC dip, accumulation zone",51,13,1,false,false
+1000000000000000092,lookonchain,2025-06-05T08:00:00Z,Whale moved 10k $ETH to exchange,52,14,2,false,false
+1000000000000000093,ansem,2025-06-05T09:00:00Z,"Bearish on $DOGE short term, dump incoming",53,15,3,false,false
+1000000000000000094,cryptohayes,2025-06-05T10:00:00Z,New token $WIF pumping hard,54,16,4,false,false
+1000000000000000095,lookonchain,2025-06-05T11:00:00Z,Accumulating $SOL under 150,55,17,0,false,false
+1000000000000000096,ansem,2025-06-05T12:00:00Z,"Rug risk on new memecoin, be careful",56,18,1,false,false
+1000000000000000097,cryptohayes,2025-06-05T13:00:00Z,mynode.sol just registered,57,19,2,false,false
+1000000000000000098,lookonchain,2025-06-05T14:00:00Z,Address FoKTT3dKz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8 accumulating,58,20,3,false,false
+1000000000000000099,ansem,2025-06-05T15:00:00Z,0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb moving funds,59,21,4,false,false
+1000000000000000100,cryptohayes,2025-06-05T16:00:00Z,"Long $SOL here, looking strong",10,2,0,false,false
+1000000000000000101,lookonchain,2025-06-05T17:00:00Z,"Buying $BTC dip, accumulation zone",11,3,1,false,false
+1000000000000000102,ansem,2025-06-05T18:00:00Z,Whale moved 10k $ETH to exchange,12,4,2,false,false
+1000000000000000103,cryptohayes,2025-06-05T19:00:00Z,"Bearish on $DOGE short term, dump incoming",13,5,3,false,false
+1000000000000000104,lookonchain,2025-06-05T20:00:00Z,New token $WIF pumping hard,14,6,4,false,false
+1000000000000000105,ansem,2025-06-05T21:00:00Z,Accumulating $SOL under 150,15,7,0,false,false
+1000000000000000106,cryptohayes,2025-06-05T22:00:00Z,"Rug risk on new memecoin, be careful",16,8,1,false,false
+1000000000000000107,lookonchain,2025-06-05T23:00:00Z,mynode.sol just registered,17,9,2,false,false
+1000000000000000108,ansem,2025-06-06T00:00:00Z,Address FoKTT3dKz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8 accumulating,18,10,3,false,false
+1000000000000000109,cryptohayes,2025-06-06T01:00:00Z,0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb moving funds,19,11,4,false,false
+1000000000000000110,lookonchain,2025-06-06T02:00:00Z,"Long $SOL here, looking strong",20,12,0,false,false
+1000000000000000111,ansem,2025-06-06T03:00:00Z,"Buying $BTC dip, accumulation zone",21,13,1,false,false
+1000000000000000112,cryptohayes,2025-06-06T04:00:00Z,Whale moved 10k $ETH to exchange,22,14,2,false,false
+1000000000000000113,lookonchain,2025-06-06T05:00:00Z,"Bearish on $DOGE short term, dump incoming",23,15,3,false,false
+1000000000000000114,ansem,2025-06-06T06:00:00Z,New token $WIF pumping hard,24,16,4,false,false
+1000000000000000115,cryptohayes,2025-06-06T07:00:00Z,Accumulating $SOL under 150,25,17,0,false,false
+1000000000000000116,lookonchain,2025-06-06T08:00:00Z,"Rug risk on new memecoin, be careful",26,18,1,false,false
+1000000000000000117,ansem,2025-06-06T09:00:00Z,mynode.sol just registered,27,19,2,false,false
+1000000000000000118,cryptohayes,2025-06-06T10:00:00Z,Address FoKTT3dKz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8Kz8 accumulating,28,20,3,false,false
+1000000000000000119,lookonchain,2025-06-06T11:00:00Z,0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb moving funds,29,21,4,false,false

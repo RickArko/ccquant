@@ -14,6 +14,18 @@ from ccquant.models import (
     OnchainPoint,
     OpenInterest,
     SyncState,
+    Tweet,
+    TweetAlert,
+    TweetEntity,
+    TweetSignalDaily,
+    TweetSyncState,
+    TwitterAccount,
+    WalletAlert,
+    WalletPositionDaily,
+    WalletRegistryEntry,
+    WalletSignalDaily,
+    WalletSyncState,
+    WalletTransfer,
 )
 
 Interval = Literal["1d", "1h"]
@@ -145,6 +157,194 @@ class MarketStore:
               latest_at varchar,
               last_refresh_at timestamp,
               primary key (series_id, source)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists wallet_registry (
+              address varchar not null,
+              chain varchar not null,
+              label varchar not null,
+              entity_type varchar not null,
+              confidence double not null,
+              source varchar not null,
+              discovered_at timestamp not null,
+              active boolean not null default true,
+              metadata_json varchar not null default '{}',
+              primary key (address, chain)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists wallet_transfers (
+              chain varchar not null,
+              tx_hash varchar not null,
+              transfer_index integer not null,
+              block_time timestamp not null,
+              from_address varchar not null,
+              to_address varchar not null,
+              asset_mint_or_contract varchar not null,
+              asset_symbol varchar,
+              amount double not null,
+              amount_usd double,
+              direction varchar not null,
+              program_or_method varchar,
+              source varchar not null,
+              primary key (
+                chain, tx_hash, transfer_index, from_address,
+                to_address, asset_mint_or_contract
+              )
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists wallet_positions_daily (
+              address varchar not null,
+              chain varchar not null,
+              date date not null,
+              asset_mint varchar not null,
+              balance double not null,
+              balance_usd double,
+              source varchar not null,
+              primary key (address, chain, date, asset_mint)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists wallet_sync_state (
+              address varchar not null,
+              chain varchar not null,
+              source varchar not null,
+              backfill_complete boolean not null default false,
+              earliest_at timestamp,
+              latest_at timestamp,
+              last_refresh_at timestamp,
+              primary key (address, chain, source)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists wallet_signals_daily (
+              date date not null,
+              chain varchar not null,
+              smart_money_netflow_usd double not null default 0,
+              kol_buy_count integer not null default 0,
+              deployer_activity_count integer not null default 0,
+              cabal_alert_count integer not null default 0,
+              top_wallet_accumulation_score double not null default 0,
+              primary key (date, chain)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists wallet_alerts (
+              address varchar not null,
+              chain varchar not null,
+              mint_or_contract varchar not null,
+              action varchar not null,
+              severity varchar not null,
+              block_time timestamp not null,
+              tx_hash varchar not null,
+              alerted_at timestamp not null,
+              metadata_json varchar not null default '{}',
+              primary key (address, chain, tx_hash, action)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists twitter_accounts (
+              handle varchar not null,
+              user_id varchar,
+              display_name varchar not null,
+              entity_type varchar not null,
+              chains varchar not null default '',
+              symbols_watch varchar not null default '',
+              confidence double not null,
+              source varchar not null,
+              active boolean not null default true,
+              metadata_json varchar not null default '{}',
+              primary key (handle)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists tweets (
+              tweet_id varchar not null,
+              handle varchar not null,
+              posted_at timestamp not null,
+              text varchar not null,
+              lang varchar,
+              is_retweet boolean not null default false,
+              is_reply boolean not null default false,
+              reply_to_tweet_id varchar,
+              conversation_id varchar,
+              like_count integer not null default 0,
+              retweet_count integer not null default 0,
+              reply_count integer not null default 0,
+              import_source varchar not null,
+              imported_at timestamp not null,
+              raw_json varchar not null default '{}',
+              primary key (tweet_id)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists tweet_entities (
+              tweet_id varchar not null,
+              entity_type varchar not null,
+              entity_value varchar not null,
+              primary key (tweet_id, entity_type, entity_value)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists tweet_sync_state (
+              handle varchar not null,
+              earliest_at timestamp,
+              latest_at timestamp,
+              latest_tweet_id varchar,
+              last_import_at timestamp,
+              backfill_complete boolean not null default false,
+              primary key (handle)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists tweet_signals_daily (
+              date date not null,
+              symbol varchar not null,
+              mention_count integer not null default 0,
+              kol_mention_count integer not null default 0,
+              bullish_keyword_count integer not null default 0,
+              bearish_keyword_count integer not null default 0,
+              unique_accounts integer not null default 0,
+              primary key (date, symbol)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists tweet_alerts (
+              tweet_id varchar not null,
+              handle varchar not null,
+              alert_type varchar not null,
+              severity varchar not null,
+              symbols varchar not null default '',
+              posted_at timestamp not null,
+              alerted_at timestamp not null,
+              metadata_json varchar not null default '{}',
+              primary key (tweet_id, alert_type)
             )
             """
         )
@@ -462,6 +662,737 @@ class MarketStore:
             "onchain_sync_state": int(state_row[0]) if state_row else 0,
         }
 
+    def upsert_wallet_registry(self, entries: list[WalletRegistryEntry]) -> int:
+        for entry in entries:
+            self._conn.execute(
+                """
+                insert into wallet_registry (
+                  address, chain, label, entity_type, confidence, source,
+                  discovered_at, active, metadata_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict (address, chain) do update set
+                  label = excluded.label,
+                  entity_type = excluded.entity_type,
+                  confidence = excluded.confidence,
+                  source = excluded.source,
+                  discovered_at = excluded.discovered_at,
+                  active = excluded.active,
+                  metadata_json = excluded.metadata_json
+                """,
+                [
+                    entry.address,
+                    entry.chain.lower(),
+                    entry.label,
+                    entry.entity_type,
+                    entry.confidence,
+                    entry.source,
+                    entry.discovered_at,
+                    entry.active,
+                    entry.metadata_json,
+                ],
+            )
+        return len(entries)
+
+    def active_wallet_registry(self) -> list[WalletRegistryEntry]:
+        rows = self._conn.execute(
+            """
+            select address, chain, label, entity_type, confidence, source,
+                   discovered_at, active, metadata_json
+            from wallet_registry
+            where active = true
+            order by chain, entity_type, label
+            """
+        ).fetchall()
+        return [self._row_to_wallet_registry(row) for row in rows]
+
+    def active_wallet_addresses(self, *, chain: str) -> list[str]:
+        rows = self._conn.execute(
+            """
+            select address
+            from wallet_registry
+            where active = true and chain = ?
+            order by confidence desc, label asc
+            """,
+            [chain.lower()],
+        ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    def upsert_wallet_transfers(self, transfers: list[WalletTransfer]) -> int:
+        for transfer in transfers:
+            self._conn.execute(
+                """
+                insert into wallet_transfers (
+                  chain, tx_hash, transfer_index, block_time, from_address,
+                  to_address, asset_mint_or_contract, asset_symbol, amount,
+                  amount_usd, direction, program_or_method, source
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict (
+                  chain, tx_hash, transfer_index, from_address,
+                  to_address, asset_mint_or_contract
+                ) do update set
+                  block_time = excluded.block_time,
+                  asset_symbol = excluded.asset_symbol,
+                  amount = excluded.amount,
+                  amount_usd = excluded.amount_usd,
+                  direction = excluded.direction,
+                  program_or_method = excluded.program_or_method,
+                  source = excluded.source
+                """,
+                [
+                    transfer.chain,
+                    transfer.tx_hash,
+                    transfer.transfer_index,
+                    transfer.block_time,
+                    transfer.from_address,
+                    transfer.to_address,
+                    transfer.asset_mint_or_contract,
+                    transfer.asset_symbol,
+                    transfer.amount,
+                    transfer.amount_usd,
+                    transfer.direction,
+                    transfer.program_or_method,
+                    transfer.source,
+                ],
+            )
+        return len(transfers)
+
+    def upsert_wallet_positions_daily(
+        self,
+        positions: list[WalletPositionDaily],
+    ) -> int:
+        for position in positions:
+            self._conn.execute(
+                """
+                insert into wallet_positions_daily (
+                  address, chain, date, asset_mint, balance, balance_usd, source
+                ) values (?, ?, ?, ?, ?, ?, ?)
+                on conflict (address, chain, date, asset_mint) do update set
+                  balance = excluded.balance,
+                  balance_usd = excluded.balance_usd,
+                  source = excluded.source
+                """,
+                [
+                    position.address,
+                    position.chain,
+                    position.date,
+                    position.asset_mint,
+                    position.balance,
+                    position.balance_usd,
+                    position.source,
+                ],
+            )
+        return len(positions)
+
+    def get_wallet_sync_state(
+        self,
+        address: str,
+        chain: str,
+        source: str,
+    ) -> WalletSyncState | None:
+        row = self._conn.execute(
+            """
+            select address, chain, source, backfill_complete, earliest_at,
+                   latest_at, last_refresh_at
+            from wallet_sync_state
+            where address = ? and chain = ? and source = ?
+            """,
+            [address, chain.lower(), source],
+        ).fetchone()
+        return None if row is None else self._row_to_wallet_sync_state(row)
+
+    def upsert_wallet_sync_state(self, state: WalletSyncState) -> None:
+        self._conn.execute(
+            """
+            insert into wallet_sync_state (
+              address, chain, source, backfill_complete, earliest_at,
+              latest_at, last_refresh_at
+            ) values (?, ?, ?, ?, ?, ?, ?)
+            on conflict (address, chain, source) do update set
+              backfill_complete = excluded.backfill_complete,
+              earliest_at = excluded.earliest_at,
+              latest_at = excluded.latest_at,
+              last_refresh_at = excluded.last_refresh_at
+            """,
+            [
+                state.address,
+                state.chain.lower(),
+                state.source,
+                state.backfill_complete,
+                state.earliest_at,
+                state.latest_at,
+                state.last_refresh_at,
+            ],
+        )
+
+    def wallet_sync_states(self) -> list[WalletSyncState]:
+        rows = self._conn.execute(
+            """
+            select address, chain, source, backfill_complete, earliest_at,
+                   latest_at, last_refresh_at
+            from wallet_sync_state
+            """
+        ).fetchall()
+        return [self._row_to_wallet_sync_state(row) for row in rows]
+
+    def upsert_wallet_signals_daily(
+        self,
+        signals: list[WalletSignalDaily],
+    ) -> int:
+        for signal in signals:
+            self._conn.execute(
+                """
+                insert into wallet_signals_daily (
+                  date, chain, smart_money_netflow_usd, kol_buy_count,
+                  deployer_activity_count, cabal_alert_count,
+                  top_wallet_accumulation_score
+                ) values (?, ?, ?, ?, ?, ?, ?)
+                on conflict (date, chain) do update set
+                  smart_money_netflow_usd = excluded.smart_money_netflow_usd,
+                  kol_buy_count = excluded.kol_buy_count,
+                  deployer_activity_count = excluded.deployer_activity_count,
+                  cabal_alert_count = excluded.cabal_alert_count,
+                  top_wallet_accumulation_score =
+                    excluded.top_wallet_accumulation_score
+                """,
+                [
+                    signal.date,
+                    signal.chain,
+                    signal.smart_money_netflow_usd,
+                    signal.kol_buy_count,
+                    signal.deployer_activity_count,
+                    signal.cabal_alert_count,
+                    signal.top_wallet_accumulation_score,
+                ],
+            )
+        return len(signals)
+
+    def upsert_wallet_alerts(self, alerts: list[WalletAlert]) -> int:
+        for alert in alerts:
+            self._conn.execute(
+                """
+                insert into wallet_alerts (
+                  address, chain, mint_or_contract, action, severity,
+                  block_time, tx_hash, alerted_at, metadata_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict (address, chain, tx_hash, action) do update set
+                  severity = excluded.severity,
+                  block_time = excluded.block_time,
+                  alerted_at = excluded.alerted_at,
+                  metadata_json = excluded.metadata_json
+                """,
+                [
+                    alert.address,
+                    alert.chain,
+                    alert.mint_or_contract,
+                    alert.action,
+                    alert.severity,
+                    alert.block_time,
+                    alert.tx_hash,
+                    alert.alerted_at,
+                    alert.metadata_json,
+                ],
+            )
+        return len(alerts)
+
+    def wallet_alerts_since(self, since: datetime) -> list[WalletAlert]:
+        rows = self._conn.execute(
+            """
+            select address, chain, mint_or_contract, action, severity,
+                   block_time, tx_hash, alerted_at, metadata_json
+            from wallet_alerts
+            where block_time >= ?
+            order by block_time desc
+            """,
+            [since],
+        ).fetchall()
+        return [self._row_to_wallet_alert(row) for row in rows]
+
+    def wallet_row_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for table in [
+            "wallet_registry",
+            "wallet_transfers",
+            "wallet_positions_daily",
+            "wallet_sync_state",
+            "wallet_signals_daily",
+            "wallet_alerts",
+        ]:
+            row = self._conn.execute(f"select count(*) from {table}").fetchone()
+            counts[table] = int(row[0]) if row else 0
+        return counts
+
+    def upsert_twitter_accounts(self, accounts: list[TwitterAccount]) -> int:
+        for account in accounts:
+            self._conn.execute(
+                """
+                insert into twitter_accounts (
+                  handle, user_id, display_name, entity_type, chains,
+                  symbols_watch, confidence, source, active, metadata_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict (handle) do update set
+                  user_id = coalesce(excluded.user_id, twitter_accounts.user_id),
+                  display_name = excluded.display_name,
+                  entity_type = excluded.entity_type,
+                  chains = excluded.chains,
+                  symbols_watch = excluded.symbols_watch,
+                  confidence = excluded.confidence,
+                  source = excluded.source,
+                  active = excluded.active,
+                  metadata_json = excluded.metadata_json
+                """,
+                [
+                    account.handle,
+                    account.user_id,
+                    account.display_name,
+                    account.entity_type,
+                    account.chains,
+                    account.symbols_watch,
+                    account.confidence,
+                    account.source,
+                    account.active,
+                    account.metadata_json,
+                ],
+            )
+        return len(accounts)
+
+    def active_twitter_accounts(self) -> list[TwitterAccount]:
+        rows = self._conn.execute(
+            """
+            select handle, user_id, display_name, entity_type, chains,
+                   symbols_watch, confidence, source, active, metadata_json
+            from twitter_accounts
+            where active = true
+            order by entity_type, handle
+            """
+        ).fetchall()
+        return [self._row_to_twitter_account(row) for row in rows]
+
+    def all_twitter_accounts(self) -> list[TwitterAccount]:
+        rows = self._conn.execute(
+            """
+            select handle, user_id, display_name, entity_type, chains,
+                   symbols_watch, confidence, source, active, metadata_json
+            from twitter_accounts
+            order by active desc, entity_type, handle
+            """
+        ).fetchall()
+        return [self._row_to_twitter_account(row) for row in rows]
+
+    def discovered_twitter_accounts(self) -> list[TwitterAccount]:
+        rows = self._conn.execute(
+            """
+            select handle, user_id, display_name, entity_type, chains,
+                   symbols_watch, confidence, source, active, metadata_json
+            from twitter_accounts
+            where source = 'import_discovered' and active = false
+            order by handle
+            """
+        ).fetchall()
+        return [self._row_to_twitter_account(row) for row in rows]
+
+    def promote_twitter_account(self, handle: str) -> bool:
+        row = self._conn.execute(
+            """
+            update twitter_accounts
+            set active = true, source = 'manual', confidence = 0.6
+            where handle = ?
+            returning handle
+            """,
+            [handle.lower()],
+        ).fetchone()
+        return row is not None
+
+    def upsert_tweets(
+        self,
+        tweets: list[Tweet],
+        *,
+        on_conflict: str = "skip",
+    ) -> int:
+        inserted = 0
+        for tweet in tweets:
+            if on_conflict == "skip":
+                existing = self._conn.execute(
+                    "select tweet_id from tweets where tweet_id = ?",
+                    [tweet.tweet_id],
+                ).fetchone()
+                if existing is not None:
+                    continue
+                self._conn.execute(
+                    """
+                    insert into tweets (
+                      tweet_id, handle, posted_at, text, lang, is_retweet, is_reply,
+                      reply_to_tweet_id, conversation_id, like_count, retweet_count,
+                      reply_count, import_source, imported_at, raw_json
+                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        tweet.tweet_id,
+                        tweet.handle,
+                        tweet.posted_at,
+                        tweet.text,
+                        tweet.lang,
+                        tweet.is_retweet,
+                        tweet.is_reply,
+                        tweet.reply_to_tweet_id,
+                        tweet.conversation_id,
+                        tweet.like_count,
+                        tweet.retweet_count,
+                        tweet.reply_count,
+                        tweet.import_source,
+                        tweet.imported_at,
+                        tweet.raw_json,
+                    ],
+                )
+            else:
+                self._conn.execute(
+                    """
+                    insert into tweets (
+                      tweet_id, handle, posted_at, text, lang, is_retweet, is_reply,
+                      reply_to_tweet_id, conversation_id, like_count, retweet_count,
+                      reply_count, import_source, imported_at, raw_json
+                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    on conflict (tweet_id) do update set
+                      like_count = excluded.like_count,
+                      retweet_count = excluded.retweet_count,
+                      reply_count = excluded.reply_count,
+                      imported_at = excluded.imported_at
+                    """,
+                    [
+                        tweet.tweet_id,
+                        tweet.handle,
+                        tweet.posted_at,
+                        tweet.text,
+                        tweet.lang,
+                        tweet.is_retweet,
+                        tweet.is_reply,
+                        tweet.reply_to_tweet_id,
+                        tweet.conversation_id,
+                        tweet.like_count,
+                        tweet.retweet_count,
+                        tweet.reply_count,
+                        tweet.import_source,
+                        tweet.imported_at,
+                        tweet.raw_json,
+                    ],
+                )
+            inserted += 1
+        return inserted
+
+    def all_tweets(self) -> list[Tweet]:
+        rows = self._conn.execute(
+            """
+            select tweet_id, handle, posted_at, text, lang, is_retweet, is_reply,
+                   reply_to_tweet_id, conversation_id, like_count, retweet_count,
+                   reply_count, import_source, imported_at, raw_json
+            from tweets
+            order by posted_at asc
+            """
+        ).fetchall()
+        return [self._row_to_tweet(row) for row in rows]
+
+    def tweets_needing_enrichment(self) -> list[Tweet]:
+        rows = self._conn.execute(
+            """
+            select t.tweet_id, t.handle, t.posted_at, t.text, t.lang, t.is_retweet,
+                   t.is_reply, t.reply_to_tweet_id, t.conversation_id, t.like_count,
+                   t.retweet_count, t.reply_count, t.import_source, t.imported_at,
+                   t.raw_json
+            from tweets t
+            left join tweet_entities e on t.tweet_id = e.tweet_id
+            where e.tweet_id is null
+            order by t.posted_at asc
+            """
+        ).fetchall()
+        return [self._row_to_tweet(row) for row in rows]
+
+    def upsert_tweet_entities(self, entities: list[TweetEntity]) -> int:
+        for entity in entities:
+            self._conn.execute(
+                """
+                insert into tweet_entities (tweet_id, entity_type, entity_value)
+                values (?, ?, ?)
+                on conflict (tweet_id, entity_type, entity_value) do nothing
+                """,
+                [entity.tweet_id, entity.entity_type, entity.entity_value],
+            )
+        return len(entities)
+
+    def tweet_entities_for(self, tweet_id: str) -> list[TweetEntity]:
+        rows = self._conn.execute(
+            """
+            select tweet_id, entity_type, entity_value
+            from tweet_entities
+            where tweet_id = ?
+            """,
+            [tweet_id],
+        ).fetchall()
+        return [
+            TweetEntity(
+                tweet_id=str(row[0]),
+                entity_type=str(row[1]),
+                entity_value=str(row[2]),
+            )
+            for row in rows
+        ]
+
+    def get_tweet_sync_state(self, handle: str) -> TweetSyncState | None:
+        row = self._conn.execute(
+            """
+            select handle, earliest_at, latest_at, latest_tweet_id,
+                   last_import_at, backfill_complete
+            from tweet_sync_state
+            where handle = ?
+            """,
+            [handle.lower()],
+        ).fetchone()
+        return None if row is None else self._row_to_tweet_sync_state(row)
+
+    def upsert_tweet_sync_state(self, state: TweetSyncState) -> None:
+        self._conn.execute(
+            """
+            insert into tweet_sync_state (
+              handle, earliest_at, latest_at, latest_tweet_id,
+              last_import_at, backfill_complete
+            ) values (?, ?, ?, ?, ?, ?)
+            on conflict (handle) do update set
+              earliest_at = excluded.earliest_at,
+              latest_at = excluded.latest_at,
+              latest_tweet_id = excluded.latest_tweet_id,
+              last_import_at = excluded.last_import_at,
+              backfill_complete = excluded.backfill_complete
+            """,
+            [
+                state.handle,
+                state.earliest_at,
+                state.latest_at,
+                state.latest_tweet_id,
+                state.last_import_at,
+                state.backfill_complete,
+            ],
+        )
+
+    def upsert_tweet_signals_daily(self, signals: list[TweetSignalDaily]) -> int:
+        for signal in signals:
+            self._conn.execute(
+                """
+                insert into tweet_signals_daily (
+                  date, symbol, mention_count, kol_mention_count,
+                  bullish_keyword_count, bearish_keyword_count, unique_accounts
+                ) values (?, ?, ?, ?, ?, ?, ?)
+                on conflict (date, symbol) do update set
+                  mention_count = excluded.mention_count,
+                  kol_mention_count = excluded.kol_mention_count,
+                  bullish_keyword_count = excluded.bullish_keyword_count,
+                  bearish_keyword_count = excluded.bearish_keyword_count,
+                  unique_accounts = excluded.unique_accounts
+                """,
+                [
+                    signal.date,
+                    signal.symbol,
+                    signal.mention_count,
+                    signal.kol_mention_count,
+                    signal.bullish_keyword_count,
+                    signal.bearish_keyword_count,
+                    signal.unique_accounts,
+                ],
+            )
+        return len(signals)
+
+    def all_tweet_signals_daily(self) -> list[TweetSignalDaily]:
+        rows = self._conn.execute(
+            """
+            select date, symbol, mention_count, kol_mention_count,
+                   bullish_keyword_count, bearish_keyword_count, unique_accounts
+            from tweet_signals_daily
+            order by date asc, symbol asc
+            """
+        ).fetchall()
+        return [self._row_to_tweet_signal(row) for row in rows]
+
+    def upsert_tweet_alerts(self, alerts: list[TweetAlert]) -> int:
+        for alert in alerts:
+            self._conn.execute(
+                """
+                insert into tweet_alerts (
+                  tweet_id, handle, alert_type, severity, symbols,
+                  posted_at, alerted_at, metadata_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict (tweet_id, alert_type) do update set
+                  severity = excluded.severity,
+                  symbols = excluded.symbols,
+                  posted_at = excluded.posted_at,
+                  alerted_at = excluded.alerted_at,
+                  metadata_json = excluded.metadata_json
+                """,
+                [
+                    alert.tweet_id,
+                    alert.handle,
+                    alert.alert_type,
+                    alert.severity,
+                    alert.symbols,
+                    alert.posted_at,
+                    alert.alerted_at,
+                    alert.metadata_json,
+                ],
+            )
+        return len(alerts)
+
+    def tweet_alerts_since(self, since: datetime) -> list[TweetAlert]:
+        rows = self._conn.execute(
+            """
+            select tweet_id, handle, alert_type, severity, symbols,
+                   posted_at, alerted_at, metadata_json
+            from tweet_alerts
+            where posted_at >= ?
+            order by posted_at desc
+            """,
+            [since],
+        ).fetchall()
+        return [self._row_to_tweet_alert(row) for row in rows]
+
+    def twitter_row_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for table in [
+            "twitter_accounts",
+            "tweets",
+            "tweet_entities",
+            "tweet_sync_state",
+            "tweet_signals_daily",
+            "tweet_alerts",
+        ]:
+            row = self._conn.execute(f"select count(*) from {table}").fetchone()
+            counts[table] = int(row[0]) if row else 0
+        return counts
+
+    @staticmethod
+    def _row_to_twitter_account(row: tuple[object, ...]) -> TwitterAccount:
+        return TwitterAccount(
+            handle=str(row[0]),
+            user_id=str(row[1]) if row[1] else None,
+            display_name=str(row[2]),
+            entity_type=str(row[3]),
+            chains=str(row[4]),
+            symbols_watch=str(row[5]),
+            confidence=float(str(row[6])),
+            source=str(row[7]),
+            active=bool(row[8]),
+            metadata_json=str(row[9]),
+        )
+
+    @staticmethod
+    def _row_to_tweet(row: tuple[object, ...]) -> Tweet:
+        posted_at = _parse_datetime(row[2])
+        imported_at = _parse_datetime(row[13])
+        return Tweet(
+            tweet_id=str(row[0]),
+            handle=str(row[1]),
+            posted_at=posted_at or datetime.now(tz=UTC),
+            text=str(row[3]),
+            lang=str(row[4]) if row[4] else None,
+            is_retweet=bool(row[5]),
+            is_reply=bool(row[6]),
+            reply_to_tweet_id=str(row[7]) if row[7] else None,
+            conversation_id=str(row[8]) if row[8] else None,
+            like_count=int(str(row[9])),
+            retweet_count=int(str(row[10])),
+            reply_count=int(str(row[11])),
+            import_source=str(row[12]),
+            imported_at=imported_at or datetime.now(tz=UTC),
+            raw_json=str(row[14]),
+        )
+
+    @staticmethod
+    def _row_to_tweet_sync_state(row: tuple[object, ...]) -> TweetSyncState:
+        return TweetSyncState(
+            handle=str(row[0]),
+            earliest_at=_parse_datetime(row[1]),
+            latest_at=_parse_datetime(row[2]),
+            latest_tweet_id=str(row[3]) if row[3] else None,
+            last_import_at=_parse_datetime(row[4]),
+            backfill_complete=bool(row[5]),
+        )
+
+    @staticmethod
+    def _row_to_tweet_signal(row: tuple[object, ...]) -> TweetSignalDaily:
+        day = row[0]
+        if not isinstance(day, date):
+            day = date.fromisoformat(str(day))
+        return TweetSignalDaily(
+            date=day,
+            symbol=str(row[1]),
+            mention_count=int(str(row[2])),
+            kol_mention_count=int(str(row[3])),
+            bullish_keyword_count=int(str(row[4])),
+            bearish_keyword_count=int(str(row[5])),
+            unique_accounts=int(str(row[6])),
+        )
+
+    @staticmethod
+    def _row_to_tweet_alert(row: tuple[object, ...]) -> TweetAlert:
+        posted_at = _parse_datetime(row[5])
+        alerted_at = _parse_datetime(row[6])
+        return TweetAlert(
+            tweet_id=str(row[0]),
+            handle=str(row[1]),
+            alert_type=str(row[2]),
+            severity=str(row[3]),
+            symbols=str(row[4]),
+            posted_at=posted_at or datetime.now(tz=UTC),
+            alerted_at=alerted_at or datetime.now(tz=UTC),
+            metadata_json=str(row[7]),
+        )
+
+    @staticmethod
+    def _row_to_wallet_registry(row: tuple[object, ...]) -> WalletRegistryEntry:
+        discovered = row[6]
+        if discovered is not None and not isinstance(discovered, datetime):
+            discovered = datetime.fromisoformat(str(discovered))
+            if discovered.tzinfo is None:
+                discovered = discovered.replace(tzinfo=UTC)
+        return WalletRegistryEntry(
+            address=str(row[0]),
+            chain=str(row[1]),
+            label=str(row[2]),
+            entity_type=str(row[3]),
+            confidence=float(str(row[4])),
+            source=str(row[5]),
+            discovered_at=(
+                discovered
+                if isinstance(discovered, datetime)
+                else datetime.now(tz=UTC)
+            ),
+            active=bool(row[7]),
+            metadata_json=str(row[8]),
+        )
+
+    @staticmethod
+    def _row_to_wallet_sync_state(row: tuple[object, ...]) -> WalletSyncState:
+        return WalletSyncState(
+            address=str(row[0]),
+            chain=str(row[1]),
+            source=str(row[2]),
+            backfill_complete=bool(row[3]),
+            earliest_at=_parse_datetime(row[4]),
+            latest_at=_parse_datetime(row[5]),
+            last_refresh_at=_parse_datetime(row[6]),
+        )
+
+    @staticmethod
+    def _row_to_wallet_alert(row: tuple[object, ...]) -> WalletAlert:
+        block_time = _parse_datetime(row[5])
+        alerted_at = _parse_datetime(row[7])
+        return WalletAlert(
+            address=str(row[0]),
+            chain=str(row[1]),
+            mint_or_contract=str(row[2]),
+            action=str(row[3]),
+            severity=str(row[4]),
+            block_time=block_time or datetime.now(tz=UTC),
+            tx_hash=str(row[6]),
+            alerted_at=alerted_at or datetime.now(tz=UTC),
+            metadata_json=str(row[8]),
+        )
+
     @staticmethod
     def _row_to_state(row: tuple[object, ...]) -> SyncState:
         last_refresh = row[5]
@@ -487,3 +1418,12 @@ def _parse_date_or_datetime(value: object) -> date | datetime | None:
         parsed = datetime.fromisoformat(raw)
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
     return date.fromisoformat(raw)
+
+
+def _parse_datetime(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
