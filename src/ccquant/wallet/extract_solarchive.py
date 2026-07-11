@@ -11,6 +11,16 @@ from ccquant.models import WalletTransfer
 from ccquant.wallet.normalize import transfers_from_solarchive_row
 
 SOLARCHIVE_INDEX_URL = "https://data.solarchive.org/txs/{date}/index.json"
+HF_PARTITION_API = (
+    "https://huggingface.co/api/datasets/solarchive/solarchive/tree/main/txs/{date}"
+)
+HF_RESOLVE_URL = (
+    "https://huggingface.co/datasets/solarchive/solarchive/resolve/main/{path}"
+)
+
+
+class SolArchivePartitionNotFoundError(RuntimeError):
+    """Raised when a SolArchive partition is missing from CDN and HuggingFace."""
 
 
 async def fetch_partition_index(
@@ -18,13 +28,49 @@ async def fetch_partition_index(
     partition_date: date,
 ) -> list[str]:
     url = SOLARCHIVE_INDEX_URL.format(date=partition_date.isoformat())
+    try:
+        resp = await client.get(url, timeout=60.0)
+        if resp.status_code == 404:
+            return await _fetch_partition_index_hf(client, partition_date)
+        resp.raise_for_status()
+        data = resp.json()
+        files = data.get("files") or data.get("parquet_files") or []
+        if isinstance(files, list) and files:
+            return [str(f) for f in files]
+    except httpx.HTTPError:
+        pass
+    return await _fetch_partition_index_hf(client, partition_date)
+
+
+async def _fetch_partition_index_hf(
+    client: httpx.AsyncClient,
+    partition_date: date,
+) -> list[str]:
+    url = HF_PARTITION_API.format(date=partition_date.isoformat())
     resp = await client.get(url, timeout=60.0)
+    if resp.status_code == 404:
+        raise SolArchivePartitionNotFoundError(
+            f"No SolArchive partition for {partition_date.isoformat()}. "
+            "Try a date listed at huggingface.co/datasets/solarchive/solarchive "
+            "(coverage is sparse — not every calendar day exists)."
+        )
     resp.raise_for_status()
     data = resp.json()
-    files = data.get("files") or data.get("parquet_files") or []
-    if isinstance(files, list):
-        return [str(f) for f in files]
-    return []
+    if isinstance(data, dict) and data.get("error"):
+        raise SolArchivePartitionNotFoundError(str(data["error"]))
+    if not isinstance(data, list):
+        return []
+    parquet_paths = [
+        str(item["path"])
+        for item in data
+        if isinstance(item, dict)
+        and str(item.get("path", "")).endswith(".parquet")
+    ]
+    if not parquet_paths:
+        raise SolArchivePartitionNotFoundError(
+            f"Partition {partition_date.isoformat()} exists but has no parquet files."
+        )
+    return [HF_RESOLVE_URL.format(path=path) for path in parquet_paths]
 
 
 async def download_parquet_file(
@@ -33,7 +79,7 @@ async def download_parquet_file(
     dest: Path,
 ) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    resp = await client.get(url, timeout=120.0)
+    resp = await client.get(url, timeout=120.0, follow_redirects=True)
     resp.raise_for_status()
     _write_bytes(dest, resp.content)
     return dest

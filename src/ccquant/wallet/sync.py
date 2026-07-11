@@ -34,7 +34,7 @@ class WalletSync:
     def __init__(self, store: MarketStore, config: AppConfig) -> None:
         self.store = store
         self.config = config
-        self._client = httpx.AsyncClient()
+        self._client = httpx.AsyncClient(follow_redirects=True)
 
     async def close(self) -> None:
         await self._client.aclose()

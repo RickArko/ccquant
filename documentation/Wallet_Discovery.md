@@ -56,7 +56,8 @@ Before scaling historical backfill:
 4. Confirm idempotent re-run: row counts stable, no duplicates.
 
 ```bash
-uv run ccquant wallet import-extract --source solarchive --date 2025-11-01
+# Pick a date that exists on HuggingFace (CDN may 404; CLI falls back automatically)
+uv run ccquant wallet import-extract --source solarchive --date 2025-12-05
 uv run ccquant sync wallets --full
 ```
 
@@ -77,15 +78,17 @@ uv run ccquant sync wallets --full
 
 ## CLI reference
 
+Options are separate flags — do not paste bracket notation like `[--full|--no-tail]`.
+
 ```bash
-uv run ccquant sync wallets              # registry + history + tail
-uv run ccquant sync wallets --full       # force historical extract
-uv run ccquant sync wallets --no-tail    # skip RPC tail refresh
+uv run ccquant sync wallets
+uv run ccquant sync wallets --full
+uv run ccquant sync wallets --no-tail
 uv run ccquant wallet discover --chain solana --top 20
-uv run ccquant wallet import-extract --source solarchive --date 2025-11-01
+uv run ccquant wallet import-extract --source solarchive --date 2025-12-05
 uv run ccquant wallet resolve-sns mitch.sol
 uv run ccquant wallet match-holder --mint TOKEN_MINT --amount 49995519
-uv run ccquant wallet alerts --since 1h
+uv run ccquant wallet alerts --since 1
 ```
 
 ## Backup and rollback

@@ -525,9 +525,19 @@ def wallet_import_extract(
             )
         finally:
             await syncer.close()
-            store.close()
 
-    count = asyncio.run(run())
+    try:
+        count = asyncio.run(run())
+    except Exception as exc:
+        from ccquant.wallet.extract_solarchive import SolArchivePartitionNotFoundError
+
+        if isinstance(exc, SolArchivePartitionNotFoundError):
+            console.print(f"[yellow]{exc}[/yellow]")
+            raise typer.Exit(code=1) from exc
+        raise
+    finally:
+        store.close()
+
     console.print(f"[green]Imported {count} transfer rows from {source}[/green]")
 
 
