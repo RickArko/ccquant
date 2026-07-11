@@ -67,12 +67,17 @@ class WalletSync:
         chain: str,
         top: int = 20,
     ) -> int:
+        discovery_cfg = self.config.wallet_tracking.discovery
+        if not discovery_cfg.flipside_enabled:
+            return 0
         entries = await fetch_flipside_labels(
             self._client,
             chain=chain,
             limit=top,
         )
-        return self.store.upsert_wallet_registry(entries)
+        count = self.store.upsert_wallet_registry(entries)
+        await asyncio.sleep(discovery_cfg.request_delay_seconds)
+        return count
 
     async def import_extract(
         self,
@@ -255,10 +260,17 @@ class WalletSync:
         }
 
     def _history_complete(self) -> bool:
-        states = self.store.wallet_sync_states()
-        if not states:
+        registry = self.store.active_wallet_registry()
+        if not registry:
             return False
-        return all(state.backfill_complete for state in states)
+        return all(
+            (state := self.store.get_wallet_sync_state(
+                entry.address, entry.chain, "history"
+            ))
+            is not None
+            and state.backfill_complete
+            for entry in registry
+        )
 
     def _mark_history_complete(self) -> None:
         now = datetime.now(tz=UTC)

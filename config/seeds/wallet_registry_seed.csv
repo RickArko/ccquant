@@ -38,6 +38,3 @@ J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn,solana,Jito Staked SOL,defi,0.85,ma
 0x16a92c43b270fbb1916501470f70c42cf6f00326,arbitrum,Smart Money Wallet A,smart_money,0.70,heuristic,"{""note"":""Bitquery example wallet""}"
 0x3a0ab56fb888159eae27f1021a0aa3bd9a73b2be,arbitrum,Bridge Withdrawal Wallet,whale,0.65,heuristic,"{""note"":""BQ example withdrawal dest""}"
 0x8c35933c469406c8899882f5c2119649cd5b617f,arbitrum,Bridge Withdrawal Wallet 2,whale,0.65,heuristic,"{""note"":""BQ example withdrawal dest""}"
-4dQ5tT8vW0xY2zA4bC6dE8fG0hI2jK4lM6nP8rR0,solana,Smart Money Echo,smart_money,0.70,heuristic,"{""win_rate"":0.42}"
-5eR6uU9wX1yZ3aB5cD7eF9gH1iJ3kL5mN7oQ9sS1,solana,Smart Money Foxtrot,smart_money,0.70,heuristic,"{""win_rate"":0.48}"
-6fS7vV0xY2zA4bC6dE8fG0hI2jK4lM6nP8rR0tT2,solana,Smart Money Golf,smart_money,0.68,heuristic,"{""win_rate"":0.39}"

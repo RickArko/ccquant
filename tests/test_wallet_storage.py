@@ -43,7 +43,7 @@ def test_committed_seed_file_loads() -> None:
     seed = Path("config/seeds/wallet_registry_seed.csv")
     assert seed.exists()
     entries = load_seed_registry(seed)
-    assert len(entries) >= 40
+    assert len(entries) >= 37
     chains = {entry.chain for entry in entries}
     assert "solana" in chains
     assert "arbitrum" in chains
@@ -349,4 +349,103 @@ def test_wallet_alerts_storage(tmp_path) -> None:
         rows = store.wallet_alerts_since(now)
         assert len(rows) == 1
     finally:
+        store.close()
+
+
+def test_history_complete_ignores_non_history_sources(tmp_path) -> None:
+    from dataclasses import replace
+
+    from ccquant.config import load_config
+    from ccquant.models import WalletSyncState
+    from ccquant.wallet.sync import WalletSync
+
+    cfg = replace(load_config(), database=tmp_path / "ccquant.duckdb")
+    store = MarketStore(cfg.database)
+    try:
+        now = datetime.now(tz=UTC)
+        entry = WalletRegistryEntry(
+            address="WalletA",
+            chain="solana",
+            label="Test",
+            entity_type="kol",
+            confidence=0.8,
+            source="manual",
+            discovered_at=now,
+            active=True,
+        )
+        store.upsert_wallet_registry([entry])
+        store.upsert_wallet_sync_state(
+            WalletSyncState(
+                address="WalletA",
+                chain="solana",
+                source="history",
+                backfill_complete=True,
+                earliest_at=now,
+                latest_at=now,
+                last_refresh_at=now,
+            )
+        )
+        store.upsert_wallet_sync_state(
+            WalletSyncState(
+                address="WalletA",
+                chain="solana",
+                source="rpc_tail",
+                backfill_complete=False,
+                earliest_at=now,
+                latest_at=now,
+                last_refresh_at=now,
+            )
+        )
+        syncer = WalletSync(store, cfg)
+        assert syncer._history_complete() is True
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_fetch_signatures_returns_empty_on_http_error() -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    import httpx
+
+    from ccquant.wallet.tail_solana import _fetch_signatures
+
+    client = MagicMock()
+    client.post = AsyncMock(side_effect=httpx.HTTPError("boom"))
+    sigs = await _fetch_signatures(
+        client,
+        rpc_url="http://rpc",
+        address="WalletA",
+        before=None,
+        limit=5,
+    )
+    assert sigs == []
+
+
+@pytest.mark.asyncio
+async def test_discover_skips_when_flipside_disabled(tmp_path) -> None:
+    from dataclasses import replace
+
+    from ccquant.config import load_config
+    from ccquant.wallet.sync import WalletSync
+
+    base = load_config()
+    cfg = replace(
+        base,
+        database=tmp_path / "ccquant.duckdb",
+        wallet_tracking=replace(
+            base.wallet_tracking,
+            discovery=replace(
+                base.wallet_tracking.discovery,
+                flipside_enabled=False,
+            ),
+        ),
+    )
+    store = MarketStore(cfg.database)
+    syncer = WalletSync(store, cfg)
+    try:
+        count = await syncer.discover(chain="solana", top=5)
+        assert count == 0
+    finally:
+        await syncer.close()
         store.close()

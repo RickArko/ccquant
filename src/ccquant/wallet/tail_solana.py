@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 from typing import Any
 
@@ -60,9 +61,12 @@ async def _fetch_signatures(
         "method": "getSignaturesForAddress",
         "params": [address, params],
     }
-    resp = await client.post(rpc_url, json=payload, timeout=30.0)
-    resp.raise_for_status()
-    data = resp.json()
+    try:
+        resp = await client.post(rpc_url, json=payload, timeout=30.0)
+        resp.raise_for_status()
+        data = resp.json()
+    except (httpx.HTTPError, json.JSONDecodeError):
+        return []
     result = data.get("result") or []
     if not isinstance(result, list):
         return []
@@ -84,9 +88,12 @@ async def _fetch_transaction(
             {"encoding": "json", "maxSupportedTransactionVersion": 0},
         ],
     }
-    resp = await client.post(rpc_url, json=payload, timeout=30.0)
-    resp.raise_for_status()
-    data = resp.json()
+    try:
+        resp = await client.post(rpc_url, json=payload, timeout=30.0)
+        resp.raise_for_status()
+        data = resp.json()
+    except (httpx.HTTPError, json.JSONDecodeError):
+        return None
     result = data.get("result")
     if isinstance(result, dict):
         result["signature"] = signature
