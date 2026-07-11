@@ -1,7 +1,11 @@
 {{
     config(
-        materialized='table',
-        schema='marts'
+        materialized='incremental',
+        incremental_strategy='merge',
+        unique_key=['symbol', 'date'],
+        on_schema_change='append_new_columns',
+        schema='marts',
+        tags=['market']
     )
 }}
 
@@ -56,25 +60,19 @@ left join {{ ref('fct_onchain_signals') }} oc
   on p.date = oc.date
 left join {{ ref('fct_macro_series') }} m
   on p.date = m.date
-left join (
-  select
-    cast(date as date) as event_date,
-    count(*) as event_count,
-    max(case when anticipated_effect_direction = 'positive' then 1 else 0 end)
-      as has_positive_event,
-    max(case when anticipated_effect_direction = 'negative' then 1 else 0 end)
-      as has_negative_event
-  from {{ ref('dim_events') }}
-  group by cast(date as date)
-) e on p.date = e.event_date
+left join {{ ref('int_events_by_date') }} e
+  on p.date = e.event_date
+left join {{ ref('int_symbol_chain_bridge') }} scm
+  on p.symbol = scm.symbol
 left join {{ ref('fct_wallet_signals_daily') }} ws
   on p.date = ws.date
-  and (
-    (p.symbol = 'SOL' and ws.chain = 'solana')
-    or (p.symbol = 'ETH' and ws.chain = 'arbitrum')
-  )
+  and scm.chain = ws.chain
 left join {{ ref('fct_tweet_mentions_daily') }} tw
   on p.symbol = tw.symbol
   and p.date = tw.date
 where p.symbol in (select symbol from {{ ref('dim_assets') }})
-order by p.symbol, p.date
+{% if is_incremental() %}
+  and p.date >= (
+    select coalesce(max(date), cast('1970-01-01' as date)) from {{ this }}
+  ) - interval 7 day
+{% endif %}

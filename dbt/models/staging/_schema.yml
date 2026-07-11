@@ -194,3 +194,199 @@ models:
             - series_id
             - date
             - source
+
+  - name: stg_tweets
+    columns:
+      - name: tweet_id
+        tests:
+          - not_null
+          - unique
+      - name: handle
+        tests:
+          - not_null
+      - name: posted_at
+        tests:
+          - not_null
+
+  - name: stg_tweet_entities
+    columns:
+      - name: tweet_id
+        tests:
+          - not_null
+      - name: entity_type
+        tests:
+          - not_null
+      - name: entity_value
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - tweet_id
+            - entity_type
+            - entity_value
+
+  - name: stg_twitter_accounts
+    columns:
+      - name: handle
+        tests:
+          - not_null
+          - unique
+
+  - name: stg_tweet_signals_daily
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: symbol
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - symbol
+
+  - name: stg_tweet_alerts
+    columns:
+      - name: tweet_id
+        tests:
+          - not_null
+      - name: alert_type
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - tweet_id
+            - alert_type
+
+  - name: stg_wallet_registry
+    columns:
+      - name: address
+        tests:
+          - not_null
+      - name: chain
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - address
+            - chain
+
+  - name: stg_wallet_transfers
+    columns:
+      - name: chain
+        tests:
+          - not_null
+      - name: tx_hash
+        tests:
+          - not_null
+      - name: block_time
+        tests:
+          - not_null
+
+  - name: stg_wallet_positions_daily
+    columns:
+      - name: address
+        tests:
+          - not_null
+      - name: chain
+        tests:
+          - not_null
+      - name: date
+        tests:
+          - not_null
+      - name: asset_mint
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - address
+            - chain
+            - date
+            - asset_mint
+
+  - name: stg_wallet_signals_daily
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: chain
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - chain
+
+  - name: stg_wallet_alerts
+    columns:
+      - name: address
+        tests:
+          - not_null
+      - name: chain
+        tests:
+          - not_null
+      - name: tx_hash
+        tests:
+          - not_null
+      - name: action
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - address
+            - chain
+            - tx_hash
+            - action
+
+  - name: stg_wallet_sync_state
+    columns:
+      - name: address
+        tests:
+          - not_null
+      - name: chain
+        tests:
+          - not_null
+      - name: source
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - address
+            - chain
+            - source
+
+  - name: stg_onchain_sync_state
+    columns:
+      - name: metric
+        tests:
+          - not_null
+      - name: source
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - metric
+            - source
+
+  - name: stg_macro_sync_state
+    columns:
+      - name: series_id
+        tests:
+          - not_null
+      - name: source
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - series_id
+            - source

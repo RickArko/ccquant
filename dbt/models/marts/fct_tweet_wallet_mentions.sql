@@ -2,7 +2,7 @@
     config(
         materialized='table',
         schema='marts',
-        tags=['twitter']
+        tags=['social']
     )
 }}
 
@@ -16,7 +16,6 @@ select
   w.entity_type as wallet_entity_type
 from {{ ref('stg_tweet_entities') }} e
 join {{ ref('stg_tweets') }} t on e.tweet_id = t.tweet_id
-left join {{ source('raw', 'wallet_registry') }} w
-  on lower(e.entity_value) = lower(w.address)
-  and w.active = true
+left join {{ ref('stg_wallet_registry') }} w
+  on lower(e.entity_value) = w.address
 where e.entity_type in ('sol_address', 'eth_address')

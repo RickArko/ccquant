@@ -2,7 +2,7 @@
     config(
         materialized='table',
         schema='marts',
-        tags=['twitter']
+        tags=['social']
     )
 }}
 

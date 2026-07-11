@@ -23,7 +23,7 @@ uv run mypy src                           # typecheck — strict mode, MUST run 
 `pre-commit` runs `ruff check --fix` -> `mypy src` -> `pytest -q` on every commit
 (hooks use `uv run` to reuse the project venv). Bypass with `git commit --no-verify`.
 
-Verify in order: `ruff check .` -> `mypy src` -> `pytest` -> `dbt build && dbt test` (dbt requires `--extra dbt`).
+Verify in order: `ruff check .` -> `mypy src` -> `pytest` -> `dbt build && dbt test` (dbt requires `--extra dbt`). Optional project lint: `dbt build --select package:dbt_project_evaluator --project-dir dbt --profiles-dir dbt`. Conventions: [`documentation/dbt_conventions.md`](documentation/dbt_conventions.md).
 
 CLI entry point is `ccquant` (`ccquant.cli:main`), a Typer app with subcommands:
 
@@ -56,6 +56,8 @@ uv run dbt seed --project-dir dbt --profiles-dir dbt          # load seeds/event
 uv run dbt build --project-dir dbt --profiles-dir dbt         # build all models + run all tests
 uv run dbt test --project-dir dbt --profiles-dir dbt          # run tests only
 uv run dbt snapshot --project-dir dbt --profiles-dir dbt      # run SCD2 snapshots
+uv run dbt build --select package:dbt_project_evaluator --project-dir dbt --profiles-dir dbt  # lint project structure
+uv run python -m tests.fixtures.seed_dbt_fixture             # seed CI fixture data locally
 ```
 
 `sync all` is the fastest way to bring the DB up to today — it runs universe

@@ -1,7 +1,8 @@
 {{
     config(
         materialized='table',
-        schema='signals'
+        schema='signals',
+        tags=['macro']
     )
 }}
 
@@ -17,4 +18,3 @@ select
   max(case when series_id = 'VIXCLS' then value end) as vixcls
 from {{ ref('stg_macro_series') }}
 group by date
-order by date

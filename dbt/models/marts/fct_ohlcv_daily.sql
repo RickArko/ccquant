@@ -1,32 +1,14 @@
 {{
     config(
-        materialized='table',
-        schema='marts'
+        materialized='incremental',
+        incremental_strategy='merge',
+        unique_key=['symbol', 'date'],
+        on_schema_change='append_new_columns',
+        schema='marts',
+        tags=['market']
     )
 }}
 
-with ranked as (
-  select
-    symbol,
-    date,
-    open,
-    high,
-    low,
-    close,
-    volume,
-    source,
-    row_number() over (
-      partition by symbol, date
-      order by
-        case source
-          when 'binance' then 1
-          when 'coinbase' then 2
-          when 'coingecko' then 3
-          else 4
-        end
-    ) as source_rank
-  from {{ ref('stg_ohlcv_daily') }}
-)
 select
   symbol,
   date,
@@ -36,5 +18,9 @@ select
   close,
   volume,
   source
-from ranked
-where source_rank = 1
+from {{ ref('int_ohlcv_daily_deduped') }}
+{% if is_incremental() %}
+where date >= (
+  select coalesce(max(date), cast('1970-01-01' as date)) from {{ this }}
+) - interval 7 day
+{% endif %}

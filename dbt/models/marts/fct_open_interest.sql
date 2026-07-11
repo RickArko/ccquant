@@ -1,24 +1,25 @@
 {{
     config(
-        materialized='table',
-        schema='marts'
+        materialized='incremental',
+        incremental_strategy='merge',
+        unique_key=['symbol', 'timestamp', 'exchange', 'interval'],
+        on_schema_change='append_new_columns',
+        schema='marts',
+        tags=['market']
     )
 }}
 
 select
-  oi.symbol,
-  oi.timestamp,
-  oi.exchange,
-  oi.interval,
-  oi.open_interest,
-  oi.unit,
-  case
-    when oi.unit = 'usd_notional' then oi.open_interest
-    when oi.unit = 'coin' then oi.open_interest * d.close
-    when oi.unit = 'contracts' then oi.open_interest * d.close
-    else oi.open_interest
-  end as open_interest_usd
-from {{ ref('stg_open_interest') }} oi
-left join {{ ref('fct_ohlcv_daily') }} d
-  on oi.symbol = d.symbol
-  and cast(oi.timestamp as date) = d.date
+  symbol,
+  timestamp,
+  exchange,
+  interval,
+  open_interest,
+  unit,
+  open_interest_usd
+from {{ ref('int_oi_usd_normalized') }}
+{% if is_incremental() %}
+where timestamp >= (
+  select coalesce(max(timestamp), cast('1970-01-01' as timestamp)) from {{ this }}
+) - interval 7 day
+{% endif %}

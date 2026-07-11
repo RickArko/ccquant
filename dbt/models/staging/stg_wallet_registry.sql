@@ -1,5 +1,5 @@
 select
-  address,
+  lower(address) as address,
   chain,
   label,
   entity_type,
