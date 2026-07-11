@@ -499,10 +499,11 @@ def test_build_bitcoin_bigquery_sql_filters_addresses() -> None:
     )
     assert "crypto_bitcoin.transactions" in sql
     assert "1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj" in sql
-    assert "cross join unnest(output.addresses)" not in sql
-    assert "cross join unnest(input.addresses)" not in sql
+    assert "unnest(t.outputs) as output with offset as output_offset," in sql
     assert "unnest(output.addresses) as addr" in sql
+    assert "unnest(t.inputs) as input with offset as input_offset," in sql
     assert "unnest(input.addresses) as addr" in sql
+    assert "counterparty" in sql
     assert "timestamp('2024-01-08')" in sql
     assert "between timestamp('2024-01-01') and timestamp('2024-01-07')" not in sql
 

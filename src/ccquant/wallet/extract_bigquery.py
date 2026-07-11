@@ -103,7 +103,14 @@ def build_bitcoin_bigquery_sql(
             addr as address,
             output.value as value_sats,
             output.type as script_type,
-            'inflow' as direction
+            'inflow' as direction,
+            (
+              select inp_addr
+              from unnest(t.inputs) as input
+              cross join unnest(input.addresses) as inp_addr
+              where inp_addr not in (select address from watched)
+              limit 1
+            ) as counterparty
           from `bigquery-public-data.crypto_bitcoin.transactions` t,
           unnest(t.outputs) as output with offset as output_offset,
           unnest(output.addresses) as addr
@@ -118,7 +125,14 @@ def build_bitcoin_bigquery_sql(
             addr as address,
             input.value as value_sats,
             input.type as script_type,
-            'outflow' as direction
+            'outflow' as direction,
+            (
+              select out_addr
+              from unnest(t.outputs) as output
+              cross join unnest(output.addresses) as out_addr
+              where out_addr not in (select address from watched)
+              limit 1
+            ) as counterparty
           from `bigquery-public-data.crypto_bitcoin.transactions` t,
           unnest(t.inputs) as input with offset as input_offset,
           unnest(input.addresses) as addr
@@ -137,7 +151,8 @@ def build_bitcoin_bigquery_sql(
           address,
           value_sats,
           script_type,
-          direction
+          direction,
+          counterparty
         from legs
         order by block_time desc
         limit {limit}

@@ -47,4 +47,5 @@ async def test_tail_bitcoin_wallets_parses_mempool_response() -> None:
     assert len(transfers) == 1
     assert transfers[0].chain == "bitcoin"
     assert transfers[0].direction == "outflow"
+    assert transfers[0].to_address == "34xp4vRoCG5Jh1B5fszvzu5uBmM2a5jSNi"
     client.get.assert_called_once()

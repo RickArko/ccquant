@@ -186,10 +186,31 @@ def transfers_from_bitcoin_tx(
         or (tx.get("status") or {}).get("block_time")
     )
     watched_norm = {_normalize_btc_address(addr) for addr in watched}
+    all_input_addresses: list[str] = []
+    all_output_addresses: list[str] = []
     transfers: list[WalletTransfer] = []
     index = 0
 
     outputs = tx.get("outputs") or tx.get("vout") or []
+    if isinstance(outputs, list):
+        for output in outputs:
+            if not isinstance(output, dict):
+                continue
+            for address in _btc_output_addresses(output):
+                norm = _normalize_btc_address(address)
+                if norm:
+                    all_output_addresses.append(norm)
+
+    inputs = tx.get("inputs") or tx.get("vin") or []
+    if isinstance(inputs, list):
+        for inp in inputs:
+            if not isinstance(inp, dict) or inp.get("is_coinbase"):
+                continue
+            for address in _btc_input_addresses(inp):
+                norm = _normalize_btc_address(address)
+                if norm:
+                    all_input_addresses.append(norm)
+
     if isinstance(outputs, list):
         for output in outputs:
             if not isinstance(output, dict):
@@ -214,7 +235,11 @@ def transfers_from_bitcoin_tx(
                         tx_hash=tx_hash,
                         transfer_index=index,
                         block_time=block_time,
-                        from_address="",
+                        from_address=_first_btc_counterparty(
+                            all_input_addresses,
+                            watched_norm,
+                            exclude=norm,
+                        ),
                         to_address=norm,
                         asset_mint_or_contract=BTC_ASSET,
                         asset_symbol="BTC",
@@ -227,7 +252,6 @@ def transfers_from_bitcoin_tx(
                 )
                 index += 1
 
-    inputs = tx.get("inputs") or tx.get("vin") or []
     if isinstance(inputs, list):
         for inp in inputs:
             if not isinstance(inp, dict):
@@ -255,7 +279,11 @@ def transfers_from_bitcoin_tx(
                         transfer_index=index,
                         block_time=block_time,
                         from_address=norm,
-                        to_address="",
+                        to_address=_first_btc_counterparty(
+                            all_output_addresses,
+                            watched_norm,
+                            exclude=norm,
+                        ),
                         asset_mint_or_contract=BTC_ASSET,
                         asset_symbol="BTC",
                         amount=value_sats / SATOSHI,
@@ -272,6 +300,21 @@ def transfers_from_bitcoin_tx(
 
 def _normalize_btc_address(address: str) -> str:
     return address.strip()
+
+
+def _first_btc_counterparty(
+    candidates: list[str],
+    watched: set[str],
+    *,
+    exclude: str,
+) -> str:
+    for addr in candidates:
+        if addr and addr != exclude and addr not in watched:
+            return addr
+    for addr in candidates:
+        if addr and addr != exclude:
+            return addr
+    return ""
 
 
 def _btc_output_addresses(output: dict[str, Any]) -> list[str]:
@@ -316,18 +359,25 @@ def transfer_from_bitcoin_bq_row(
     if not address:
         return None
     direction = str(row.get("direction") or "inflow")
+    counterparty = str(row.get("counterparty") or "")
     block_time = _parse_block_time(row.get("block_time"))
     value_sats = _parse_satoshi(row.get("value_sats"))
     leg_index = int(row.get("leg_index") or 0)
     script_type = str(row.get("script_type") or "unknown")
     tx_hash = str(row.get("hash") or "")
+    if direction == "outflow":
+        from_address = address
+        to_address = counterparty
+    else:
+        from_address = counterparty
+        to_address = address
     return WalletTransfer(
         chain="bitcoin",
         tx_hash=tx_hash,
         transfer_index=leg_index,
         block_time=block_time,
-        from_address=address if direction == "outflow" else "",
-        to_address=address if direction == "inflow" else "",
+        from_address=from_address,
+        to_address=to_address,
         asset_mint_or_contract=BTC_ASSET,
         asset_symbol="BTC",
         amount=value_sats / SATOSHI,

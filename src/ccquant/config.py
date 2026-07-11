@@ -259,7 +259,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             chains=[
                 str(chain).lower()
                 for chain in wallet_data.get(
-                    "chains", ["solana", "arbitrum", "bitcoin"]
+                    "chains", ["solana", "arbitrum"]
                 )
             ],
             seed_file=Path(

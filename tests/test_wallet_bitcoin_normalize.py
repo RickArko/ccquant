@@ -59,6 +59,7 @@ def test_transfers_from_bitcoin_tx_input_outflow() -> None:
     outflows = [t for t in transfers if t.direction == "outflow"]
     assert len(outflows) == 1
     assert outflows[0].from_address == "1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj"
+    assert outflows[0].to_address == "34xp4vRoCG5Jh1B5fszvzu5uBmM2a5jSNi"
     assert outflows[0].amount == 1.0
 
 
@@ -71,6 +72,7 @@ def test_transfer_from_bitcoin_bq_row() -> None:
         "value_sats": 250_000_000,
         "script_type": "p2sh",
         "direction": "inflow",
+        "counterparty": "1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj",
     }
     transfer = transfer_from_bitcoin_bq_row(row, source="bigquery")
     assert transfer is not None
@@ -78,3 +80,5 @@ def test_transfer_from_bitcoin_bq_row() -> None:
     assert transfer.transfer_index == 2
     assert transfer.amount == 2.5
     assert transfer.program_or_method == "p2sh"
+    assert transfer.from_address == "1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj"
+    assert transfer.to_address == "3QJmV3qfvL9SuYo34YihAf3sEmW6uKcBAS"
