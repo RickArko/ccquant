@@ -208,7 +208,7 @@ def sync_all(
             # 3. Hourly tail-refresh
             top = hourly_top if hourly_top is not None else cfg.hourly.top
             console.print(f"\n[dim]Hourly tail-refresh (top {top})...[/dim]")
-            hourly = await syncer.backfill(interval="1h", full=True, top=top)
+            hourly = await syncer.backfill(interval="1h", full=False, top=top)
             console.print(f"[green]Hourly: {sum(hourly.values())} candles[/green]")
 
             # 4. Open interest tail-refresh
@@ -325,6 +325,8 @@ def _export(config: str | None, out: Path, *, fmt: str) -> None:
             "onchain_series",
             "onchain_sync_state",
             "open_interest",
+            "macro_series",
+            "macro_sync_state",
         ]:
             path = store.export_table(table, out, fmt=fmt)
             console.print(f"[green]wrote[/green] {path}")

@@ -411,8 +411,9 @@ class MarketStore:
         source_path = Path(source_db)
         if not source_path.exists():
             raise FileNotFoundError(f"source DB not found: {source_path}")
+        escaped = source_path.as_posix().replace("'", "''")
         self._conn.execute(
-            f"attach '{source_path}' as _src (read_only)"
+            f"attach '{escaped}' as _src (read_only)"
         )
         try:
             self._conn.execute(

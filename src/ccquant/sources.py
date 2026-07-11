@@ -417,7 +417,8 @@ async def fetch_binance_oi(
             )
         if len(batch) < 500:
             break
-        start_ms = int(batch[-1]["timestamp"]) + MS_PER_HOUR
+        step_ms = MS_PER_HOUR if period == "1h" else MS_PER_DAY
+        start_ms = int(batch[-1]["timestamp"]) + step_ms
     return points
 
 

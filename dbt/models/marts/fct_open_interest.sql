@@ -19,7 +19,6 @@ select
     else oi.open_interest
   end as open_interest_usd
 from {{ ref('stg_open_interest') }} oi
-left join {{ ref('stg_ohlcv_daily') }} d
+left join {{ ref('fct_ohlcv_daily') }} d
   on oi.symbol = d.symbol
   and cast(oi.timestamp as date) = d.date
-  and d.source = 'binance'

@@ -7,7 +7,6 @@ Usage: uv run python scripts/render_chart_images.py
 """
 from __future__ import annotations
 
-import json
 import os
 import warnings
 from datetime import UTC, date, datetime, timedelta
@@ -27,7 +26,7 @@ from ccquant.forecasting import load_daily_panel
 warnings.filterwarnings("ignore")
 
 # --- Setup ------------------------------------------------------------------
-_root = Path("/home/ricka/Git/GitHub/ccquant")
+_root = Path(__file__).resolve().parent.parent
 load_dotenv(_root / ".env")
 
 DB_PATH = os.environ.get("CCQUANT_DB", str(_root / "data" / "ccquant.duckdb"))
@@ -463,6 +462,7 @@ BLOCKCHAIN_METRICS: dict[str, str] = {
 }
 BC_API = "https://api.blockchain.info/charts"
 import time as _time
+
 
 def fetch_bc(chart: str) -> list[tuple[date, float]]:
     with httpx.Client(timeout=30.0) as client:
