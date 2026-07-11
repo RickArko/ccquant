@@ -24,9 +24,10 @@ from ccquant.wallet.extract_solarchive import (
     load_transfers_from_parquet,
     partition_dates,
 )
+from ccquant.wallet.normalize import watched_address
 from ccquant.wallet.seeds import load_seed_registry, resolve_seed_path
 from ccquant.wallet.tail_arbitrum import tail_arbitrum_wallets
-from ccquant.wallet.tail_solana import latest_block_time, tail_solana_wallets
+from ccquant.wallet.tail_solana import tail_solana_wallets
 
 
 class WalletSync:
@@ -289,25 +290,34 @@ class WalletSync:
         if not transfers:
             return
         now = datetime.now(tz=UTC)
-        latest = latest_block_time(transfers) or now
-        addresses = {
-            t.from_address or t.to_address
-            for t in transfers
-            if t.from_address or t.to_address
-        }
-        for address in addresses:
+        times_by_address: dict[str, list[datetime]] = {}
+        for transfer in transfers:
+            address = watched_address(transfer)
             if not address:
                 continue
+            times_by_address.setdefault(address, []).append(transfer.block_time)
+        for address, times in times_by_address.items():
+            earliest_batch = min(times)
+            latest_batch = max(times)
             state = self.store.get_wallet_sync_state(address, chain, source)
-            earliest = state.earliest_at if state else latest
+            prior_earliest = state.earliest_at if state else None
+            prior_latest = state.latest_at if state else None
             self.store.upsert_wallet_sync_state(
                 WalletSyncState(
                     address=address,
                     chain=chain,
                     source=source,
                     backfill_complete=state.backfill_complete if state else False,
-                    earliest_at=min(earliest, latest) if earliest else latest,
-                    latest_at=latest,
+                    earliest_at=(
+                        min(prior_earliest, earliest_batch)
+                        if prior_earliest is not None
+                        else earliest_batch
+                    ),
+                    latest_at=(
+                        max(prior_latest, latest_batch)
+                        if prior_latest is not None
+                        else latest_batch
+                    ),
                     last_refresh_at=now,
                 )
             )

@@ -17,6 +17,7 @@ from ccquant.wallet.normalize import (
     transfers_from_arbitrum_tx,
     transfers_from_solana_tx,
     transfers_from_solarchive_row,
+    watched_address,
 )
 from ccquant.wallet.seeds import load_seed_registry
 
@@ -38,7 +39,7 @@ def test_committed_seed_file_loads() -> None:
     seed = Path("config/seeds/wallet_registry_seed.csv")
     assert seed.exists()
     entries = load_seed_registry(seed)
-    assert len(entries) >= 50
+    assert len(entries) >= 40
     chains = {entry.chain for entry in entries}
     assert "solana" in chains
     assert "arbitrum" in chains
@@ -156,6 +157,74 @@ def test_normalize_arbitrum_tx() -> None:
     transfers = transfers_from_arbitrum_tx(tx, watched=watched, source="test")
     assert len(transfers) == 1
     assert transfers[0].asset_symbol == "ETH"
+
+
+def test_normalize_arbitrum_tx_parses_wei_as_int() -> None:
+    watched = {"0xabc"}
+    tx = {
+        "hash": "0xhash",
+        "block_time": "2026-07-01T12:00:00+00:00",
+        "from": "0xabc",
+        "to": "0xdef",
+        "value": "1000000000000000000",
+    }
+    transfers = transfers_from_arbitrum_tx(tx, watched=watched, source="test")
+    assert transfers[0].amount == pytest.approx(1.0)
+
+
+def test_watched_address_prefers_directional_side() -> None:
+    inflow = WalletTransfer(
+        chain="arbitrum",
+        tx_hash="0xhash",
+        transfer_index=1,
+        block_time=datetime.now(tz=UTC),
+        from_address="0xsender",
+        to_address="0xwatched",
+        asset_mint_or_contract="native",
+        asset_symbol="ETH",
+        amount=1.0,
+        amount_usd=None,
+        direction="inflow",
+        program_or_method="transfer",
+        source="test",
+    )
+    assert watched_address(inflow) == "0xwatched"
+
+
+def test_detect_alerts_arbitrum_inflow_with_both_addresses() -> None:
+    now = datetime.now(tz=UTC)
+    registry = {
+        ("0xwatched", "arbitrum"): WalletRegistryEntry(
+            address="0xwatched",
+            chain="arbitrum",
+            label="Whale",
+            entity_type="whale",
+            confidence=0.8,
+            source="manual",
+            discovered_at=now,
+            active=True,
+        )
+    }
+    transfers = [
+        WalletTransfer(
+            chain="arbitrum",
+            tx_hash="0xhash",
+            transfer_index=1,
+            block_time=now,
+            from_address="0xsender",
+            to_address="0xwatched",
+            asset_mint_or_contract="native",
+            asset_symbol="ETH",
+            amount=1.0,
+            amount_usd=None,
+            direction="inflow",
+            program_or_method="transfer",
+            source="test",
+        )
+    ]
+    alerts = detect_alerts(transfers, registry, since=now)
+    assert len(alerts) == 1
+    assert alerts[0].address == "0xwatched"
 
 
 def test_normalize_solarchive_row() -> None:

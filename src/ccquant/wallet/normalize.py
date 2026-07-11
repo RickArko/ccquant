@@ -9,6 +9,14 @@ SOL_MINT = "So11111111111111111111111111111111111111112"
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
 
+def watched_address(transfer: WalletTransfer) -> str:
+    if transfer.direction == "inflow":
+        return transfer.to_address or transfer.from_address
+    if transfer.direction == "outflow":
+        return transfer.from_address or transfer.to_address
+    return transfer.from_address or transfer.to_address
+
+
 def transfers_from_solana_tx(
     tx: dict[str, Any],
     *,
@@ -117,7 +125,7 @@ def transfers_from_arbitrum_tx(
     )
     from_addr = str(tx.get("from") or tx.get("from_address") or "").lower()
     to_addr = str(tx.get("to") or tx.get("to_address") or "").lower()
-    value_wei = float(tx.get("value") or 0)
+    value_wei = _parse_wei(tx.get("value"))
     transfers: list[WalletTransfer] = []
     index = 0
 
@@ -260,6 +268,12 @@ def _token_balance_map(
         if owner:
             mapped[str(owner)] = (mint, amount, symbol)
     return mapped
+
+
+def _parse_wei(value: Any) -> int:
+    if value is None or value == "":
+        return 0
+    return int(value)
 
 
 def _parse_block_time(value: Any) -> datetime:

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 from ccquant.models import WalletAlert, WalletRegistryEntry, WalletTransfer
+from ccquant.wallet.normalize import watched_address
 
 
 def detect_alerts(
@@ -17,7 +19,7 @@ def detect_alerts(
     for transfer in transfers:
         if transfer.block_time < cutoff:
             continue
-        watched = transfer.from_address or transfer.to_address
+        watched = watched_address(transfer)
         entry = registry.get((watched, transfer.chain))
         if entry is None:
             continue
@@ -33,8 +35,8 @@ def detect_alerts(
                 block_time=transfer.block_time,
                 tx_hash=transfer.tx_hash,
                 alerted_at=now,
-                metadata_json=(
-                    f'{{"label":"{entry.label}","entity_type":"{entry.entity_type}"}}'
+                metadata_json=json.dumps(
+                    {"label": entry.label, "entity_type": entry.entity_type}
                 ),
             )
         )
