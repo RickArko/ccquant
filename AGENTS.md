@@ -9,7 +9,9 @@ limits, and key setup instructions are in [`documentation/API_Pricing.md`](docum
 ## Commands
 
 ```bash
-uv sync --extra dev                       # install dev tooling (mypy, pytest, ruff, pre-commit)
+uv sync --extra dev                       # lint/test tooling (mypy, pytest, ruff, pre-commit)
+uv sync --extra dev --extra notebook --extra forecast  # + Jupyter/plotly + modeling libs for notebooks
+uv sync --extra dev --extra notebook --extra forecast --extra dbt  # + dbt transforms
 uv run pre-commit install                 # install git hook (run once after clone)
 uv run pre-commit run --all-files         # run all hooks manually
 uv run pytest                             # all tests
@@ -31,7 +33,12 @@ uv run ccquant sync universe [--size N] [--config FILE]   # fetch top-cap univer
 uv run ccquant sync backfill --interval {1d|1h} [--top N] [--full|--tail] [--config FILE]
 uv run ccquant sync oi [--interval {1d|1h}] [--top N] [--full|--tail]   # open interest (Binance+Bybit+OKX)
 uv run ccquant sync macro                  # FRED macro series
+uv run ccquant sync wallets [--full|--no-tail]  # wallet registry + history + tail
 uv run ccquant migrate onchain [--source FILE]  # migrate onchain.duckdb into main DB
+uv run ccquant wallet discover --chain solana --top 20
+uv run ccquant wallet import-extract --source solarchive --date YYYY-MM-DD
+uv run ccquant wallet resolve-sns mitch.sol
+uv run ccquant wallet alerts --since 1
 uv run ccquant db backup [--dest DIR] [--keep N]  # timestamped file-copy backup
 uv run ccquant status
 uv run ccquant export parquet --out data/export
@@ -51,9 +58,9 @@ uv run dbt snapshot --project-dir dbt --profiles-dir dbt      # run SCD2 snapsho
 
 `sync all` is the fastest way to bring the DB up to today — it runs universe
 refresh, then tail-refreshes daily and hourly (only fetching recent candles,
-not re-pulling full history), then OI + macro, then `dbt build` to rebuild
+not re-pulling full history), then OI + macro + wallets, then `dbt build` to rebuild
 marts/signals/events. Use it for routine updates. Use `--no-dbt` to skip the
-dbt step (e.g. when dbt isn't installed).
+dbt step (e.g. when dbt isn't installed). Use `--no-wallets` to skip wallet sync.
 
 `sync universe` marks all previously active assets inactive before inserting the new set.
 
@@ -78,7 +85,9 @@ dbt step (e.g. when dbt isn't installed).
   symbol with neither Binance pair nor Coinbase product yields zero hourly candles.
 - DuckDB tables: `assets`, `ohlcv_daily`, `ohlcv_hourly`, `sync_state`,
   `onchain_series`, `onchain_sync_state`, `open_interest`, `macro_series`,
-  `macro_sync_state`. Schema is created idempotently on `MarketStore` init.
+  `macro_sync_state`, `wallet_registry`, `wallet_transfers`,
+  `wallet_positions_daily`, `wallet_sync_state`, `wallet_signals_daily`,
+  `wallet_alerts`. Schema is created idempotently on `MarketStore` init.
   `sync_state.earliest_at`/`latest_at` are stored as ISO varchar.
 - dbt transformation layer lives in `dbt/`. Python owns `main` schema (raw);
   dbt owns `main_staging` (views), `main_marts` (tables), `main_signals`

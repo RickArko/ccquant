@@ -82,3 +82,79 @@ class MacroPoint:
     value: float
     source: str
 
+
+@dataclass(frozen=True)
+class WalletRegistryEntry:
+    address: str
+    chain: str
+    label: str
+    entity_type: str
+    confidence: float
+    source: str
+    discovered_at: datetime
+    active: bool
+    metadata_json: str = "{}"
+
+
+@dataclass(frozen=True)
+class WalletTransfer:
+    chain: str
+    tx_hash: str
+    transfer_index: int
+    block_time: datetime
+    from_address: str
+    to_address: str
+    asset_mint_or_contract: str
+    asset_symbol: str | None
+    amount: float
+    amount_usd: float | None
+    direction: str
+    program_or_method: str | None
+    source: str
+
+
+@dataclass(frozen=True)
+class WalletPositionDaily:
+    address: str
+    chain: str
+    date: date
+    asset_mint: str
+    balance: float
+    balance_usd: float | None
+    source: str
+
+
+@dataclass
+class WalletSyncState:
+    address: str
+    chain: str
+    source: str
+    backfill_complete: bool = False
+    earliest_at: datetime | None = None
+    latest_at: datetime | None = None
+    last_refresh_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class WalletSignalDaily:
+    date: date
+    chain: str
+    smart_money_netflow_usd: float
+    kol_buy_count: int
+    deployer_activity_count: int
+    cabal_alert_count: int
+    top_wallet_accumulation_score: float
+
+
+@dataclass(frozen=True)
+class WalletAlert:
+    address: str
+    chain: str
+    mint_or_contract: str
+    action: str
+    severity: str
+    block_time: datetime
+    tx_hash: str
+    alerted_at: datetime
+    metadata_json: str = "{}"
+
