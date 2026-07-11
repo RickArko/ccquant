@@ -16,6 +16,7 @@ clean-targets:
   - "dbt_packages"
 
 vars:
+  evm_chains: ['arbitrum', 'ethereum']
   dbt_project_evaluator:
     primary_key_test_macros: [["dbt.test_unique", "dbt.test_not_null"], ["dbt_utils.test_unique_combination_of_columns"]]
 
