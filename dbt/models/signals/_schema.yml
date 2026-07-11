@@ -1,0 +1,22 @@
+version: 2
+
+models:
+  - name: fct_onchain_signals
+    description: >
+      On-chain metrics pivoted wide by date. One row per date with columns
+      for each metric (hashrate, difficulty, MVRV, NUPL, etc.).
+    columns:
+      - name: date
+        tests:
+          - not_null
+          - unique
+
+  - name: fct_macro_series
+    description: >
+      FRED macro indicators pivoted wide by date. One row per date with
+      columns for each series (M2SL, WALCL, DGS10, etc.).
+    columns:
+      - name: date
+        tests:
+          - not_null
+          - unique

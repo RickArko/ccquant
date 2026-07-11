@@ -48,3 +48,37 @@ class SyncState:
     latest_at: date | datetime | None = None
     last_refresh_at: datetime | None = None
 
+
+@dataclass(frozen=True)
+class OnchainPoint:
+    metric: str
+    date: date
+    value: float
+    source: str
+
+
+@dataclass(frozen=True)
+class OnchainSyncState:
+    metric: str
+    source: str
+    latest_at: str | None
+    last_refresh_at: datetime | None
+
+
+@dataclass(frozen=True)
+class OpenInterest:
+    symbol: str
+    timestamp: datetime
+    open_interest: float
+    exchange: str
+    unit: str
+    interval: str
+
+
+@dataclass(frozen=True)
+class MacroPoint:
+    series_id: str
+    date: date
+    value: float
+    source: str
+

@@ -7,15 +7,25 @@ from datetime import UTC, date, datetime, timedelta
 import httpx
 
 from ccquant.config import AppConfig
-from ccquant.models import Asset, DailyOhlcv, HourlyOhlcv, SyncState
+from ccquant.models import (
+    Asset,
+    DailyOhlcv,
+    HourlyOhlcv,
+    OpenInterest,
+    SyncState,
+)
 from ccquant.sources import (
     coinbase_product_id,
     default_binance_pair,
     fetch_binance_daily,
     fetch_binance_hourly,
+    fetch_binance_oi,
+    fetch_bybit_oi,
     fetch_coinbase_daily,
     fetch_coinbase_hourly,
     fetch_coingecko_daily,
+    fetch_fred_series,
+    fetch_okx_oi,
     fetch_top_markets,
     probe_binance_pair,
     probe_coinbase_product,
@@ -150,6 +160,125 @@ class MarketSync:
         _update_state(state, [c.hour for c in candles], full=full)
         self.store.upsert_state(state)
         return count
+
+    async def backfill_open_interest(
+        self,
+        asset: Asset,
+        *,
+        interval: str = "1h",
+        full: bool = False,
+    ) -> int:
+        oi_cfg = self.config.open_interest
+        if not oi_cfg.enabled:
+            return 0
+        now = datetime.now(tz=UTC).replace(minute=0, second=0, microsecond=0)
+        hours = (
+            oi_cfg.history_days * 24
+            if full
+            else oi_cfg.tail_hours
+        )
+        start = now - timedelta(hours=hours)
+        points: list[OpenInterest] = []
+        if oi_cfg.binance and asset.binance_pair:
+            try:
+                points = await fetch_binance_oi(
+                    await self.client(),
+                    symbol=asset.symbol,
+                    pair=asset.binance_pair,
+                    interval=interval,
+                    start=start,
+                    end=now,
+                )
+            except httpx.HTTPError as exc:
+                LOGGER.warning(
+                    "Binance OI fetch failed for %s: %s", asset.symbol, exc
+                )
+                points = []
+        if oi_cfg.bybit and asset.binance_pair:
+            try:
+                bybit_points = await fetch_bybit_oi(
+                    await self.client(),
+                    symbol=asset.symbol,
+                    pair=asset.binance_pair,
+                    interval=interval,
+                    start=start,
+                    end=now,
+                )
+                points.extend(bybit_points)
+            except httpx.HTTPError as exc:
+                LOGGER.warning(
+                    "Bybit OI fetch failed for %s: %s", asset.symbol, exc
+                )
+        if oi_cfg.okx:
+            try:
+                okx_points = await fetch_okx_oi(
+                    await self.client(),
+                    symbol=asset.symbol,
+                    interval=interval,
+                    start=start,
+                    end=now,
+                )
+                points.extend(okx_points)
+            except httpx.HTTPError as exc:
+                LOGGER.warning(
+                    "OKX OI fetch failed for %s: %s", asset.symbol, exc
+                )
+        if not points:
+            return 0
+        return self.store.upsert_open_interest(points)
+
+    async def backfill_oi_all(
+        self,
+        *,
+        interval: str = "1h",
+        full: bool = False,
+        top: int | None = None,
+    ) -> dict[str, int]:
+        if not self.store.active_assets():
+            await self.update_universe()
+        assets = self.store.active_assets(limit=top)
+        results: dict[str, int] = {}
+        for asset in assets:
+            try:
+                results[asset.symbol] = await self.backfill_open_interest(
+                    asset, interval=interval, full=full
+                )
+            except httpx.HTTPError as exc:
+                LOGGER.warning(
+                    "OI fetch failed for %s: %s", asset.symbol, exc
+                )
+                results[asset.symbol] = 0
+            await asyncio.sleep(self.config.open_interest.request_delay_seconds)
+        return results
+
+    async def backfill_macro(self) -> dict[str, int]:
+        macro_cfg = self.config.macro
+        if not macro_cfg.enabled:
+            return {}
+        import os
+
+        api_key = os.environ.get("FRED_API_KEY", "")
+        if not api_key:
+            LOGGER.warning("FRED_API_KEY not set — skipping macro sync")
+            return {}
+        client = await self.client()
+        results: dict[str, int] = {}
+        for series_id in macro_cfg.series_ids:
+            try:
+                points = await fetch_fred_series(
+                    client,
+                    series_id=series_id,
+                    api_key=api_key,
+                )
+                count = self.store.upsert_macro_series(points)
+                results[series_id] = count
+            except httpx.HTTPError as exc:
+                LOGGER.warning(
+                    "FRED fetch failed for %s: %s", series_id, exc
+                )
+                results[series_id] = 0
+            await asyncio.sleep(macro_cfg.request_delay_seconds)
+        return results
 
     async def _fetch_daily(
         self,

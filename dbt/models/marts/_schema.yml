@@ -1,0 +1,113 @@
+version: 2
+
+models:
+  - name: dim_assets
+    description: >
+      Latest snapshot of active assets in the research universe.
+      One row per active symbol.
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+          - unique
+      - name: rank
+        tests:
+          - not_null
+
+  - name: fct_ohlcv_daily
+    description: >
+      Daily OHLCV with source deduplication by priority (binance > coinbase >
+      coingecko). One row per symbol x date.
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+      - name: date
+        tests:
+          - not_null
+      - name: close
+        tests:
+          - not_null
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['binance', 'coinbase', 'coingecko']
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - symbol
+            - date
+
+  - name: fct_open_interest
+    description: >
+      Per-exchange open interest normalized to USD notional. For exchanges
+      reporting in coin or contract units, the value is converted using the
+      daily close price from stg_ohlcv_daily.
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+      - name: timestamp
+        tests:
+          - not_null
+      - name: exchange
+        tests:
+          - not_null
+      - name: open_interest_usd
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - symbol
+            - timestamp
+            - exchange
+            - interval
+
+  - name: fct_open_interest_agg
+    description: >
+      Market-wide aggregate open interest. Sums USD-normalized OI across
+      all exchanges present in fct_open_interest for each symbol x timestamp.
+      Auto-includes new exchanges as they are enabled — no SQL changes needed.
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+      - name: timestamp
+        tests:
+          - not_null
+      - name: total_open_interest_usd
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - symbol
+            - timestamp
+            - interval
+
+  - name: mart_signals_daily
+    description: >
+      Canonical daily analytics panel joining price, open interest, on-chain
+      signals, macro indicators, and event flags. One row per symbol x date.
+      Only includes symbols in the active universe (dim_assets).
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+      - name: date
+        tests:
+          - not_null
+      - name: close
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - symbol
+            - date

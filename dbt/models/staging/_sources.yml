@@ -1,0 +1,112 @@
+version: 2
+
+sources:
+  - name: raw
+    description: >
+      Raw tables ingested by the Python layer (src/ccquant). dbt never writes
+      to these — they are read-only sources for staging models.
+    schema: main
+    tables:
+      - name: assets
+        description: >
+          Active research universe with CoinGecko IDs and exchange pairs.
+          Grain: symbol x as_of_date.
+        columns:
+          - name: symbol
+            description: Uppercase ticker symbol (primary key component).
+          - name: as_of_date
+            description: Date the universe snapshot was taken.
+          - name: rank
+            description: Market-cap rank at snapshot time.
+          - name: active
+            description: Whether the asset is in the active universe.
+
+      - name: ohlcv_daily
+        description: >
+          Daily OHLCV candles by symbol, date, and source.
+          Grain: symbol x date x source.
+        columns:
+          - name: symbol
+          - name: date
+          - name: open
+          - name: high
+          - name: low
+          - name: close
+          - name: volume
+          - name: source
+            description: Data source — binance, coinbase, or coingecko.
+
+      - name: ohlcv_hourly
+        description: >
+          Hourly OHLCV candles by symbol, hour, and source.
+          Grain: symbol x hour x source.
+        columns:
+          - name: symbol
+          - name: hour
+          - name: open
+          - name: high
+          - name: low
+          - name: close
+          - name: volume
+          - name: source
+
+      - name: sync_state
+        description: >
+          Per-symbol sync metadata tracking backfill progress.
+          Grain: symbol x interval.
+        columns:
+          - name: symbol
+          - name: interval
+          - name: backfill_complete
+          - name: earliest_at
+          - name: latest_at
+          - name: last_refresh_at
+
+      - name: onchain_series
+        description: >
+          On-chain metric time series (MVRV, NUPL, hashrate, etc.) migrated
+          from onchain.duckdb. Grain: metric x date x source.
+        columns:
+          - name: metric
+          - name: date
+          - name: value
+          - name: source
+
+      - name: onchain_sync_state
+        description: >
+          Per-metric sync metadata for on-chain series. Grain: metric x source.
+        columns:
+          - name: metric
+          - name: source
+          - name: latest_at
+          - name: last_refresh_at
+
+      - name: open_interest
+        description: >
+          Open interest by symbol, timestamp, exchange, and interval.
+          Grain: symbol x timestamp x exchange x interval.
+        columns:
+          - name: symbol
+          - name: timestamp
+          - name: open_interest
+          - name: exchange
+          - name: unit
+          - name: interval
+
+      - name: macro_series
+        description: >
+          Macro indicator time series (FRED). Grain: series_id x date x source.
+        columns:
+          - name: series_id
+          - name: date
+          - name: value
+          - name: source
+
+      - name: macro_sync_state
+        description: >
+          Per-series sync metadata for macro data. Grain: series_id x source.
+        columns:
+          - name: series_id
+          - name: source
+          - name: latest_at
+          - name: last_refresh_at

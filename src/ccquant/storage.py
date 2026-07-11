@@ -6,7 +6,15 @@ from typing import Literal
 
 import duckdb
 
-from ccquant.models import Asset, DailyOhlcv, HourlyOhlcv, SyncState
+from ccquant.models import (
+    Asset,
+    DailyOhlcv,
+    HourlyOhlcv,
+    MacroPoint,
+    OnchainPoint,
+    OpenInterest,
+    SyncState,
+)
 
 Interval = Literal["1d", "1h"]
 
@@ -80,6 +88,63 @@ class MarketStore:
               latest_at varchar,
               last_refresh_at timestamp,
               primary key (symbol, interval)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists onchain_series (
+              metric varchar not null,
+              date date not null,
+              value double not null,
+              source varchar not null,
+              primary key (metric, date, source)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists onchain_sync_state (
+              metric varchar not null,
+              source varchar not null,
+              latest_at varchar,
+              last_refresh_at timestamp,
+              primary key (metric, source)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists open_interest (
+              symbol varchar not null,
+              timestamp timestamp not null,
+              open_interest double not null,
+              exchange varchar not null,
+              unit varchar not null,
+              interval varchar not null,
+              primary key (symbol, timestamp, exchange, interval)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists macro_series (
+              series_id varchar not null,
+              date date not null,
+              value double not null,
+              source varchar not null,
+              primary key (series_id, date, source)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists macro_sync_state (
+              series_id varchar not null,
+              source varchar not null,
+              latest_at varchar,
+              last_refresh_at timestamp,
+              primary key (series_id, source)
             )
             """
         )
@@ -280,6 +345,122 @@ class MarketStore:
                 [str(dest)],
             )
         return dest
+
+    def upsert_onchain_series(self, points: list[OnchainPoint]) -> int:
+        for point in points:
+            self._conn.execute(
+                """
+                insert into onchain_series (metric, date, value, source)
+                values (?, ?, ?, ?)
+                on conflict (metric, date, source) do update set
+                  value = excluded.value
+                """,
+                [point.metric, point.date, point.value, point.source],
+            )
+        return len(points)
+
+    def upsert_open_interest(self, points: list[OpenInterest]) -> int:
+        for point in points:
+            self._conn.execute(
+                """
+                insert into open_interest (
+                  symbol, timestamp, open_interest, exchange, unit, interval
+                ) values (?, ?, ?, ?, ?, ?)
+                on conflict (symbol, timestamp, exchange, interval) do update set
+                  open_interest = excluded.open_interest,
+                  unit = excluded.unit
+                """,
+                [
+                    point.symbol.upper(),
+                    point.timestamp,
+                    point.open_interest,
+                    point.exchange,
+                    point.unit,
+                    point.interval,
+                ],
+            )
+        return len(points)
+
+    def upsert_macro_series(self, points: list[MacroPoint]) -> int:
+        for point in points:
+            self._conn.execute(
+                """
+                insert into macro_series (series_id, date, value, source)
+                values (?, ?, ?, ?)
+                on conflict (series_id, date, source) do update set
+                  value = excluded.value
+                """,
+                [point.series_id, point.date, point.value, point.source],
+            )
+        return len(points)
+
+    def backup(self, dest_dir: Path, *, keep: int = 10) -> Path:
+        self._conn.execute("checkpoint")
+        timestamp = datetime.now(tz=UTC).strftime("%Y%m%d-%H%M%S")
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f"ccquant-{timestamp}.duckdb"
+        import shutil
+
+        shutil.copy2(str(self.path), str(dest))
+        backups = sorted(dest_dir.glob("ccquant-*.duckdb"), reverse=True)
+        for old in backups[keep:]:
+            old.unlink()
+        return dest
+
+    def migrate_onchain(self, source_db: str | Path) -> dict[str, int]:
+        source_path = Path(source_db)
+        if not source_path.exists():
+            raise FileNotFoundError(f"source DB not found: {source_path}")
+        escaped = source_path.as_posix().replace("'", "''")
+        self._conn.execute(
+            f"attach '{escaped}' as _src (read_only)"
+        )
+        try:
+            self._conn.execute(
+                """
+                insert into onchain_series (metric, date, value, source)
+                select metric, date, value, source from _src.onchain_series
+                on conflict (metric, date, source) do update set
+                  value = excluded.value
+                """
+            )
+            series_row = self._conn.execute(
+                "select count(*) from onchain_series"
+            ).fetchone()
+            series_count = int(series_row[0]) if series_row else 0
+            self._conn.execute(
+                """
+                insert into onchain_sync_state (metric, source, latest_at,
+                  last_refresh_at)
+                select metric, source, latest_at, last_refresh_at
+                from _src.onchain_sync_state
+                on conflict (metric, source) do update set
+                  latest_at = excluded.latest_at,
+                  last_refresh_at = excluded.last_refresh_at
+                """
+            )
+            state_row = self._conn.execute(
+                "select count(*) from onchain_sync_state"
+            ).fetchone()
+            state_count = int(state_row[0]) if state_row else 0
+        finally:
+            self._conn.execute("detach _src")
+        return {
+            "onchain_series": int(series_count),
+            "onchain_sync_state": int(state_count),
+        }
+
+    def onchain_row_counts(self) -> dict[str, int]:
+        series_row = self._conn.execute(
+            "select count(*) from onchain_series"
+        ).fetchone()
+        state_row = self._conn.execute(
+            "select count(*) from onchain_sync_state"
+        ).fetchone()
+        return {
+            "onchain_series": int(series_row[0]) if series_row else 0,
+            "onchain_sync_state": int(state_row[0]) if state_row else 0,
+        }
 
     @staticmethod
     def _row_to_state(row: tuple[object, ...]) -> SyncState:

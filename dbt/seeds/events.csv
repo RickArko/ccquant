@@ -1,0 +1,5 @@
+date,category,title,description,asset_scope,anticipated_effect_direction,magnitude,confidence,source_url
+2024-01-11,regulatory,"SEC approves Bitcoin ETFs","SEC approves spot Bitcoin ETFs including BlackRock, Fidelity, Ark Invest",BTC,positive,high,high,https://www.sec.gov
+2024-04-20,halving,"Bitcoin halving","Fourth Bitcoin halving reducing block reward from 6.25 to 3.125 BTC",BTC,positive,medium,high,https://bitcoinhalving.app
+2024-08-28,monetary,"Powell Jackson Hole speech","Fed Chair signals rate cuts coming at September FOMC meeting",BTC,positive,medium,medium,https://www.federalreserve.gov
+2025-01-20,legislative,"US Presidential inauguration","New administration expected to be more crypto-friendly",BTC,positive,low,low,https://www.whitehouse.gov
