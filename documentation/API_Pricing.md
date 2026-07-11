@@ -263,7 +263,7 @@ Used by `ccquant sync wallets` and `Wallet_SOL.ipynb`.
 | **SolArchive** | Solana historical Parquet partitions | Free (CC-BY-4.0) | No | **Use** for bounded history backfill |
 | **BigQuery public** | Solana + Arbitrum SQL extracts | Free (1 TB/mo) | GCP creds optional | **Use** with `uv sync --extra wallet` |
 | **Flipside** | Wallet labels (`dim_labels`) | Free tier | `FLIPSIDE_API_KEY` | **Use** for discovery |
-| **Solana public RPC** | Tail refresh (`getSignaturesForAddress`) | Free | No | **Use** (rate-limited, ≤50 wallets) |
+| **Solana public RPC** | Tail refresh (`getSignaturesForAddress`) | Free | No | **Smoke test only** — `429` at 50 wallets; use dedicated RPC for tail |
 | **camp** | Arbitrum tail REST API | Free | No | **Use** (rolling ~30d window) |
 | **Etherscan** | ETH/Arbitrum ERC-20 tail | Free (100k calls/day) | `ETHERSCAN_API_KEY` | Optional |
 | **Helius** | Solana archival `getTransactionsForAddress` | Paid ($49+/mo) | API key | Upgrade path |

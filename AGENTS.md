@@ -33,9 +33,9 @@ uv run ccquant sync universe [--size N] [--config FILE]   # fetch top-cap univer
 uv run ccquant sync backfill --interval {1d|1h} [--top N] [--full|--tail] [--config FILE]
 uv run ccquant sync oi [--interval {1d|1h}] [--top N] [--full|--tail]   # open interest (Binance+Bybit+OKX)
 uv run ccquant sync macro                  # FRED macro series
-uv run ccquant sync wallets              # wallet registry + history + tail
+uv run ccquant sync wallets --no-tail    # wallet registry only (start here; no RPC)
 uv run ccquant sync wallets --full       # force historical extract
-uv run ccquant sync wallets --no-tail    # skip RPC tail refresh
+uv run ccquant sync wallets              # + RPC tail (needs dedicated solana_rpc_url)
 uv run ccquant migrate onchain [--source FILE]  # migrate onchain.duckdb into main DB
 uv run ccquant wallet discover --chain solana --top 20
 uv run ccquant wallet import-extract --source solarchive --date YYYY-MM-DD

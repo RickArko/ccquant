@@ -78,18 +78,35 @@ uv run ccquant sync wallets --full
 
 ## CLI reference
 
-Options are separate flags — do not paste bracket notation like `[--full|--no-tail]`.
+Options are separate flags — do not paste bracket notation like
+`[--full|--no-tail]`. The commands below are a **catalog**; run them
+individually, not as one pasted block.
+
+### Happy path (local, $0)
 
 ```bash
-uv run ccquant sync wallets
-uv run ccquant sync wallets --full
 uv run ccquant sync wallets --no-tail
-uv run ccquant wallet discover --chain solana --top 20
 uv run ccquant wallet import-extract --source solarchive --date 2025-12-05
-uv run ccquant wallet resolve-sns mitch.sol
-uv run ccquant wallet match-holder --mint TOKEN_MINT --amount 49995519
-uv run ccquant wallet alerts --since 1
+uv run ccquant wallet alerts --since 24
 ```
+
+Pick a partition date that exists on
+[HuggingFace solarchive/solarchive](https://huggingface.co/datasets/solarchive/solarchive)
+(CDN often 404s; CLI falls back automatically).
+
+### All commands
+
+```bash
+uv run ccquant sync wallets --no-tail
+uv run ccquant wallet import-extract --source solarchive --date 2025-12-05
+uv run ccquant wallet alerts --since 24
+```
+
+**Tail refresh caveat:** default `sync wallets` polls up to 50 wallets against
+`https://api.mainnet-beta.solana.com`, which returns `429 Too Many Requests`
+under load. For tail monitoring, set `wallet_tracking.tail.solana_rpc_url` to a
+dedicated endpoint (Helius, QuickNode, etc.) and reduce `max_wallets` in
+[`config/example.yaml`](../config/example.yaml).
 
 ## Backup and rollback
 
