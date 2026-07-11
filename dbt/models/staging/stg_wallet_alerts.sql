@@ -1,5 +1,5 @@
 select
-  lower(address) as address,
+  {{ normalize_wallet_address('address', 'chain') }} as address,
   cast(chain as varchar) as chain,
   cast(mint_or_contract as varchar) as mint_or_contract,
   cast(action as varchar) as action,

@@ -1,5 +1,5 @@
 select
-  lower(address) as address,
+  {{ normalize_wallet_address('address', 'chain') }} as address,
   cast(chain as varchar) as chain,
   cast(date as date) as date,
   cast(asset_mint as varchar) as asset_mint,

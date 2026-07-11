@@ -87,8 +87,8 @@ def build_bitcoin_bigquery_sql(
             output.type as script_type,
             'inflow' as direction
           from `bigquery-public-data.crypto_bitcoin.transactions` t,
-          unnest(t.outputs) as output with offset as output_offset
-          cross join unnest(output.addresses) as addr
+          unnest(t.outputs) as output with offset as output_offset,
+          unnest(output.addresses) as addr
           where t.block_timestamp between timestamp('{start.isoformat()}')
             and timestamp('{end.isoformat()}')
             and addr in (select address from watched)
@@ -103,8 +103,8 @@ def build_bitcoin_bigquery_sql(
             input.type as script_type,
             'outflow' as direction
           from `bigquery-public-data.crypto_bitcoin.transactions` t,
-          unnest(t.inputs) as input with offset as input_offset
-          cross join unnest(input.addresses) as addr
+          unnest(t.inputs) as input with offset as input_offset,
+          unnest(input.addresses) as addr
           where t.block_timestamp between timestamp('{start.isoformat()}')
             and timestamp('{end.isoformat()}')
             and addr in (select address from watched)

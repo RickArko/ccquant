@@ -1,5 +1,5 @@
 select
-  lower(address) as address,
+  {{ normalize_wallet_address('address', 'chain') }} as address,
   cast(chain as varchar) as chain,
   cast(source as varchar) as source,
   cast(backfill_complete as boolean) as backfill_complete,

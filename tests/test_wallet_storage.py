@@ -463,6 +463,10 @@ def test_build_bitcoin_bigquery_sql_filters_addresses() -> None:
     )
     assert "crypto_bitcoin.transactions" in sql
     assert "1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj" in sql
+    assert "cross join unnest(output.addresses)" not in sql
+    assert "cross join unnest(input.addresses)" not in sql
+    assert "unnest(output.addresses) as addr" in sql
+    assert "unnest(input.addresses) as addr" in sql
 
 
 @pytest.mark.asyncio
