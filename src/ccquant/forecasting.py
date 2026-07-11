@@ -64,7 +64,8 @@ def load_signals_panel(database: str | Path) -> pl.DataFrame:
     """Return the canonical daily analytics panel from dbt marts.
 
     Joins price, open interest, on-chain signals, macro indicators,
-    wallet intelligence, and event flags. Requires the dbt marts layer.
+    wallet intelligence, tweet signals, and event flags.
+    Requires the dbt marts layer.
     """
     with duckdb.connect(str(database), read_only=True) as conn:
         df = pl.from_arrow(
@@ -98,3 +99,19 @@ def load_wallet_panel(database: str | Path) -> pl.DataFrame:
         )
     return df if isinstance(df, pl.DataFrame) else df.to_frame()
 
+
+def load_tweet_panel(database: str | Path) -> pl.DataFrame:
+    """Return daily tweet mention signals from dbt marts."""
+    with duckdb.connect(str(database), read_only=True) as conn:
+        if not _table_exists(conn, "main_marts", "fct_tweet_mentions_daily"):
+            return pl.DataFrame()
+        df = pl.from_arrow(
+            conn.execute(
+                """
+                select *
+                from main_marts.fct_tweet_mentions_daily
+                order by symbol, date
+                """
+            ).to_arrow_table()
+        )
+    return df if isinstance(df, pl.DataFrame) else df.to_frame()

@@ -55,4 +55,20 @@ wallet_tracking:
     flipside_enabled: true
     min_win_rate: 0.35
     request_delay_seconds: 1.0
+twitter_tracking:
+  enabled: true
+  accounts_seed: config/seeds/twitter_accounts_seed.csv
+  import:
+    inbox_dir: data/twitter/inbox
+    archive_dir: data/twitter/archive
+    formats: [csv, jsonl]
+    on_conflict: skip
+  enrichment:
+    extract_cashtags: true
+    extract_addresses: true
+    extract_sol_domains: true
+    keyword_sentiment: true
+  signals:
+    spike_window_days: 30
+    spike_z_threshold: 2.0
 

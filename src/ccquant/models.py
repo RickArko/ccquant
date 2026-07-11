@@ -158,3 +158,76 @@ class WalletAlert:
     alerted_at: datetime
     metadata_json: str = "{}"
 
+
+@dataclass(frozen=True)
+class TwitterAccount:
+    handle: str
+    user_id: str | None
+    display_name: str
+    entity_type: str
+    chains: str
+    symbols_watch: str
+    confidence: float
+    source: str
+    active: bool
+    metadata_json: str = "{}"
+
+
+@dataclass(frozen=True)
+class Tweet:
+    tweet_id: str
+    handle: str
+    posted_at: datetime
+    text: str
+    lang: str | None
+    is_retweet: bool
+    is_reply: bool
+    reply_to_tweet_id: str | None
+    conversation_id: str | None
+    like_count: int
+    retweet_count: int
+    reply_count: int
+    import_source: str
+    imported_at: datetime
+    raw_json: str
+
+
+@dataclass(frozen=True)
+class TweetEntity:
+    tweet_id: str
+    entity_type: str
+    entity_value: str
+
+
+@dataclass
+class TweetSyncState:
+    handle: str
+    earliest_at: datetime | None = None
+    latest_at: datetime | None = None
+    latest_tweet_id: str | None = None
+    last_import_at: datetime | None = None
+    backfill_complete: bool = False
+
+
+@dataclass(frozen=True)
+class TweetSignalDaily:
+    date: date
+    symbol: str
+    mention_count: int
+    kol_mention_count: int
+    bullish_keyword_count: int
+    bearish_keyword_count: int
+    unique_accounts: int
+
+
+@dataclass(frozen=True)
+class TweetAlert:
+    tweet_id: str
+    handle: str
+    alert_type: str
+    severity: str
+    symbols: str
+    posted_at: datetime
+    alerted_at: datetime
+    metadata_json: str = "{}"
+

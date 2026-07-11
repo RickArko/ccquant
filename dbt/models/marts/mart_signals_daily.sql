@@ -43,7 +43,10 @@ select
   ws.kol_buy_count,
   ws.deployer_activity_count,
   ws.cabal_alert_count,
-  ws.top_wallet_accumulation_score
+  ws.top_wallet_accumulation_score,
+  tw.tweet_mention_count,
+  tw.kol_tweet_mention_count,
+  tw.tweet_sentiment_net
 from {{ ref('fct_ohlcv_daily') }} p
 left join {{ ref('fct_open_interest_agg') }} oi_agg
   on p.symbol = oi_agg.symbol
@@ -70,5 +73,8 @@ left join {{ ref('fct_wallet_signals_daily') }} ws
     (p.symbol = 'SOL' and ws.chain = 'solana')
     or (p.symbol = 'ETH' and ws.chain = 'arbitrum')
   )
+left join {{ ref('fct_tweet_mentions_daily') }} tw
+  on p.symbol = tw.symbol
+  and p.date = tw.date
 where p.symbol in (select symbol from {{ ref('dim_assets') }})
 order by p.symbol, p.date

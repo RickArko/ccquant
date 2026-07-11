@@ -111,6 +111,47 @@ sources:
           - name: latest_at
           - name: last_refresh_at
 
+      - name: twitter_accounts
+        description: >
+          Curated crypto twitter watchlist. Grain: handle.
+        columns:
+          - name: handle
+          - name: entity_type
+          - name: active
+
+      - name: tweets
+        description: >
+          Normalized tweets from CSV/JSONL imports. Grain: tweet_id.
+        columns:
+          - name: tweet_id
+          - name: handle
+          - name: posted_at
+          - name: text
+
+      - name: tweet_entities
+        description: >
+          Extracted cashtags, addresses, urls. Grain: tweet_id x entity.
+        columns:
+          - name: tweet_id
+          - name: entity_type
+          - name: entity_value
+
+      - name: tweet_signals_daily
+        description: >
+          Pre-aggregated tweet mention signals per symbol/day.
+        columns:
+          - name: date
+          - name: symbol
+          - name: mention_count
+
+      - name: tweet_alerts
+        description: >
+          Batch-detected high-signal tweet events.
+        columns:
+          - name: tweet_id
+          - name: alert_type
+          - name: posted_at
+
       - name: wallet_registry
         description: >
           Curated and discovered wallet addresses with labels and provenance.
