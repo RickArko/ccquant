@@ -48,12 +48,11 @@ def detect_alerts(
 def _meets_alert_threshold(transfer: WalletTransfer) -> bool:
     if transfer.chain != "bitcoin":
         return True
-    amount_btc = transfer.amount
-    if amount_btc >= 100.0:
+    if transfer.amount >= 10.0:
         return True
-    if transfer.amount_usd is not None and transfer.amount_usd >= 1_000_000:
-        return True
-    return amount_btc >= 10.0 and transfer.asset_symbol == "BTC"
+    return (
+        transfer.amount_usd is not None and transfer.amount_usd >= 100_000
+    )
 
 
 def _action_for_transfer(

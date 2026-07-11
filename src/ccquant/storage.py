@@ -762,8 +762,7 @@ class MarketStore:
                 on conflict (address, chain, identity_id) do update set
                   link_type = excluded.link_type,
                   confidence = excluded.confidence,
-                  source = excluded.source,
-                  linked_at = excluded.linked_at
+                  source = excluded.source
                 """,
                 [
                     link.address,

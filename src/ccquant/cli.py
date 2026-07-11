@@ -190,7 +190,7 @@ def sync_wallets(
             return await syncer.sync_all(
                 full=full,
                 tail=not no_tail,
-                history=full or not no_tail,
+                history=not no_tail,
             )
         finally:
             await syncer.close()

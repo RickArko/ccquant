@@ -56,10 +56,20 @@ def load_seed_identities(path: Path) -> list[WalletIdentity]:
     return identities
 
 
+def _parse_linked_at(value: str | None) -> datetime:
+    if value is None or not value.strip():
+        return datetime.now(tz=UTC)
+    raw = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(raw)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    except ValueError:
+        return datetime.now(tz=UTC)
+
+
 def load_seed_identity_links(path: Path) -> list[WalletIdentityLink]:
     if not path.exists():
         return []
-    now = datetime.now(tz=UTC)
     links: list[WalletIdentityLink] = []
     with path.open("r", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
@@ -72,7 +82,7 @@ def load_seed_identity_links(path: Path) -> list[WalletIdentityLink]:
                     link_type=row.get("link_type", "associated").strip().lower(),
                     confidence=float(row.get("confidence") or 0.5),
                     source=row.get("source", "manual").strip().lower(),
-                    linked_at=now,
+                    linked_at=_parse_linked_at(row.get("linked_at")),
                 )
             )
     return links

@@ -15,6 +15,23 @@ def _sql_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _exclusive_end_date(end: date) -> date:
+    return end + timedelta(days=1)
+
+
+def _timestamp_range_predicate(
+    column: str,
+    *,
+    start: date,
+    end: date,
+) -> str:
+    end_exclusive = _exclusive_end_date(end).isoformat()
+    return (
+        f"{column} >= timestamp('{start.isoformat()}') "
+        f"and {column} < timestamp('{end_exclusive}')"
+    )
+
+
 def build_solana_bigquery_sql(
     addresses: list[str],
     *,
@@ -23,14 +40,14 @@ def build_solana_bigquery_sql(
     limit: int = 5000,
 ) -> str:
     quoted = ", ".join(_sql_quote(addr) for addr in addresses)
+    time_filter = _timestamp_range_predicate("block_timestamp", start=start, end=end)
     return f"""
         select
           signature,
           block_timestamp as block_time,
           account_keys
         from `bigquery-public-data.crypto_solana_mainnet_us.transactions`
-        where block_timestamp between timestamp('{start.isoformat()}')
-          and timestamp('{end.isoformat()}')
+        where {time_filter}
           and exists (
             select 1 from unnest(account_keys) as key
             where key in ({quoted})
@@ -47,6 +64,7 @@ def build_arbitrum_bigquery_sql(
     limit: int = 5000,
 ) -> str:
     quoted = ", ".join(f"lower({_sql_quote(addr)})" for addr in addresses)
+    time_filter = _timestamp_range_predicate("block_timestamp", start=start, end=end)
     return f"""
         select
           transaction_hash as hash,
@@ -55,8 +73,7 @@ def build_arbitrum_bigquery_sql(
           to_address as `to`,
           value
         from `bigquery-public-data.goog_blockchain_arbitrum_one_us.transactions`
-        where block_timestamp between timestamp('{start.isoformat()}')
-          and timestamp('{end.isoformat()}')
+        where {time_filter}
           and (
             lower(from_address) in ({quoted})
             or lower(to_address) in ({quoted})
@@ -73,6 +90,7 @@ def build_bitcoin_bigquery_sql(
     limit: int = 5000,
 ) -> str:
     quoted = ", ".join(_sql_quote(addr) for addr in addresses)
+    time_filter = _timestamp_range_predicate("t.block_timestamp", start=start, end=end)
     return f"""
         with watched as (
           select address from unnest([{quoted}]) as address
@@ -89,8 +107,7 @@ def build_bitcoin_bigquery_sql(
           from `bigquery-public-data.crypto_bitcoin.transactions` t,
           unnest(t.outputs) as output with offset as output_offset,
           unnest(output.addresses) as addr
-          where t.block_timestamp between timestamp('{start.isoformat()}')
-            and timestamp('{end.isoformat()}')
+          where {time_filter}
             and addr in (select address from watched)
         ),
         input_legs as (
@@ -105,8 +122,7 @@ def build_bitcoin_bigquery_sql(
           from `bigquery-public-data.crypto_bitcoin.transactions` t,
           unnest(t.inputs) as input with offset as input_offset,
           unnest(input.addresses) as addr
-          where t.block_timestamp between timestamp('{start.isoformat()}')
-            and timestamp('{end.isoformat()}')
+          where {time_filter}
             and addr in (select address from watched)
         ),
         legs as (

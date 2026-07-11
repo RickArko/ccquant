@@ -13,7 +13,7 @@ from ccquant.models import (
     WalletTransfer,
 )
 from ccquant.storage import MarketStore
-from ccquant.wallet.alerts import detect_alerts
+from ccquant.wallet.alerts import _meets_alert_threshold, detect_alerts
 from ccquant.wallet.discovery import match_holder_amount, score_wallet_performance
 from ccquant.wallet.extract_bigquery import (
     build_arbitrum_bigquery_sql,
@@ -411,7 +411,7 @@ def test_history_complete_ignores_non_history_sources(tmp_path) -> None:
 def test_upsert_wallet_identities_and_links(tmp_path) -> None:
     store = MarketStore(tmp_path / "ccquant.duckdb")
     try:
-        now = datetime.now(tz=UTC)
+        linked_at = datetime(2024, 6, 1, 12, 0)
         identities = [
             WalletIdentity(
                 identity_id="strategy",
@@ -430,7 +430,7 @@ def test_upsert_wallet_identities_and_links(tmp_path) -> None:
                 link_type="owns",
                 confidence=0.9,
                 source="manual",
-                linked_at=now,
+                linked_at=linked_at,
             ),
             WalletIdentityLink(
                 address="bc1qjasf9z3h7l3jkaware86a4s4ut9t928cerovd",
@@ -439,7 +439,7 @@ def test_upsert_wallet_identities_and_links(tmp_path) -> None:
                 link_type="owns",
                 confidence=0.85,
                 source="manual",
-                linked_at=now,
+                linked_at=linked_at,
             ),
         ]
         assert store.upsert_wallet_identities(identities) == 1
@@ -449,8 +449,44 @@ def test_upsert_wallet_identities_and_links(tmp_path) -> None:
         ).fetchone()
         assert row is not None
         assert int(row[0]) == 2
+
+        updated = WalletIdentityLink(
+            address="1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj",
+            chain="bitcoin",
+            identity_id="strategy",
+            link_type="owns",
+            confidence=0.99,
+            source="manual",
+            linked_at=datetime(2025, 6, 1),
+        )
+        store.upsert_wallet_identity_links([updated])
+        preserved = store.connection.execute(
+            """
+            select linked_at, confidence
+            from wallet_identity_links
+            where address = ? and chain = 'bitcoin' and identity_id = 'strategy'
+            """,
+            ["1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj"],
+        ).fetchone()
+        assert preserved is not None
+        assert preserved[0] == linked_at
+        assert float(preserved[1]) == pytest.approx(0.99)
     finally:
         store.close()
+
+
+def test_load_seed_identity_links_parses_linked_at(tmp_path) -> None:
+    from ccquant.wallet.seeds import load_seed_identity_links
+
+    seed = tmp_path / "links.csv"
+    seed.write_text(
+        "address,chain,identity_id,link_type,confidence,source,linked_at\n"
+        "bc1qtest,bitcoin,strategy,owns,0.9,manual,2024-03-15T12:00:00+00:00\n",
+        encoding="utf-8",
+    )
+    links = load_seed_identity_links(seed)
+    assert len(links) == 1
+    assert links[0].linked_at == datetime(2024, 3, 15, 12, tzinfo=UTC)
 
 
 def test_build_bitcoin_bigquery_sql_filters_addresses() -> None:
@@ -467,6 +503,36 @@ def test_build_bitcoin_bigquery_sql_filters_addresses() -> None:
     assert "cross join unnest(input.addresses)" not in sql
     assert "unnest(output.addresses) as addr" in sql
     assert "unnest(input.addresses) as addr" in sql
+    assert "timestamp('2024-01-08')" in sql
+    assert "between timestamp('2024-01-01') and timestamp('2024-01-07')" not in sql
+
+
+def test_bitcoin_alert_threshold() -> None:
+    base = dict(
+        chain="bitcoin",
+        tx_hash="tx",
+        transfer_index=0,
+        block_time=datetime.now(tz=UTC),
+        from_address="a",
+        to_address="b",
+        asset_mint_or_contract="btc",
+        asset_symbol="BTC",
+        direction="inflow",
+        program_or_method="p2wpkh",
+        source="test",
+    )
+    assert not _meets_alert_threshold(
+        WalletTransfer(amount=5.0, amount_usd=None, **base)
+    )
+    assert _meets_alert_threshold(
+        WalletTransfer(amount=10.0, amount_usd=None, **base)
+    )
+    assert _meets_alert_threshold(
+        WalletTransfer(amount=1.0, amount_usd=100_000.0, **base)
+    )
+    assert not _meets_alert_threshold(
+        WalletTransfer(amount=1.0, amount_usd=50_000.0, **base)
+    )
 
 
 @pytest.mark.asyncio
