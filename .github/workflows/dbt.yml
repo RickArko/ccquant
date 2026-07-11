@@ -23,6 +23,17 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev --extra dbt
 
+      - name: Initialize database schema
+        run: |
+          uv run python -c "
+          from ccquant.config import load_config
+          from ccquant.storage import MarketStore
+          cfg = load_config()
+          store = MarketStore(cfg.database)
+          store.close()
+          print('Database initialized:', cfg.database)
+          "
+
       - name: Install dbt packages
         run: uv run dbt deps --project-dir dbt --profiles-dir dbt
 
