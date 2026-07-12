@@ -94,17 +94,26 @@ def sync_backfill(
         typer.Option("--interval", "-i", help="1d or 1h"),
     ] = "1d",
     full: bool = typer.Option(True, "--full/--tail"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Ignore sync_state.backfill_complete and re-pull full history",
+    ),
     top: int | None = typer.Option(None, "--top", help="Limit to top-N ranked assets"),
 ) -> None:
     """Backfill or tail-refresh OHLCV data."""
     if interval not in {"1d", "1h"}:
         raise typer.BadParameter("interval must be 1d or 1h")
+    if force and not full:
+        raise typer.BadParameter("--force requires --full (omit --tail)")
     store, cfg = _load(config)
     syncer = MarketSync(store, cfg)
 
     async def run() -> dict[str, int]:
         try:
-            return await syncer.backfill(interval=interval, full=full, top=top)
+            return await syncer.backfill(
+                interval=interval, full=full, top=top, force=force
+            )
         finally:
             await syncer.close()
             store.close()

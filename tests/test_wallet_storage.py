@@ -281,6 +281,67 @@ def test_normalize_solarchive_row() -> None:
     assert transfers[0].source == "solarchive"
 
 
+def test_normalize_solarchive_row_accounts_ndarray() -> None:
+    import numpy as np
+
+    from ccquant.wallet.normalize import coerce_account_key_list
+
+    watched = {"WalletA"}
+    row = {
+        "signature": "sig2",
+        "block_time": "2026-07-01T12:00:00+00:00",
+        "accounts": np.array(["WalletA", "WalletB"], dtype=object),
+        "fee": 5000,
+    }
+    assert coerce_account_key_list(row["accounts"]) == ["WalletA", "WalletB"]
+    transfers = transfers_from_solarchive_row(row, watched=watched)
+    assert len(transfers) == 1
+    assert transfers[0].from_address == "WalletA"
+
+
+def test_load_transfers_from_parquet_uses_accounts_column(tmp_path) -> None:
+    import duckdb
+
+    from ccquant.wallet.extract_solarchive import load_transfers_from_parquet
+
+    parquet_path = tmp_path / "part.parquet"
+    conn = duckdb.connect()
+    conn.execute(
+        """
+        create table t as
+        select
+          'sig'::varchar as signature,
+          timestamp '2026-07-01 12:00:00' as block_time,
+          [
+            {'pubkey': 'WalletA', 'signer': true, 'writable': true},
+            {'pubkey': 'Other', 'signer': false, 'writable': false}
+          ] as accounts,
+          5000::bigint as fee
+        """
+    )
+    conn.execute(f"copy t to '{parquet_path.as_posix()}' (format parquet)")
+    transfers = load_transfers_from_parquet(
+        parquet_path,
+        watched={"WalletA"},
+        conn=conn,
+    )
+    conn.close()
+    assert len(transfers) == 1
+    assert transfers[0].tx_hash == "sig"
+
+
+def test_coerce_account_key_list_struct_dicts() -> None:
+    from ccquant.wallet.normalize import coerce_account_key_list
+
+    keys = coerce_account_key_list(
+        [
+            {"pubkey": "WalletA", "signer": True, "writable": True},
+            {"pubkey": "WalletB", "signer": False, "writable": False},
+        ]
+    )
+    assert keys == ["WalletA", "WalletB"]
+
+
 def test_match_holder_amount() -> None:
     holders = [
         ("wallet1", 49_995_519),

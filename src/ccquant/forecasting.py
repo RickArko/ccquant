@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import duckdb
@@ -15,13 +17,35 @@ def _table_exists(conn: duckdb.DuckDBPyConnection, schema: str, table: str) -> b
     return bool(row and row[0] > 0)
 
 
+@contextmanager
+def _readonly_connect(database: str | Path) -> Iterator[duckdb.DuckDBPyConnection]:
+    """Open DuckDB read-only with a clearer message on file lock conflicts."""
+    path = str(database)
+    try:
+        conn = duckdb.connect(path, read_only=True)
+    except Exception as exc:
+        msg = str(exc)
+        if "Conflicting lock" in msg or "Could not set lock" in msg:
+            raise RuntimeError(
+                f"DuckDB is locked by another process: {path}. "
+                "Close wallet sync / other notebooks writing the same file "
+                "(or restart their kernels), then retry. "
+                "See https://duckdb.org/docs/stable/connect/concurrency"
+            ) from exc
+        raise
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
 def load_daily_panel(database: str | Path) -> pl.DataFrame:
     """Return daily OHLCV rows sorted for forecasting pipelines.
 
     Reads from the dbt marts layer (fct_ohlcv_daily) when available,
     falling back to raw ohlcv_daily for backward compatibility.
     """
-    with duckdb.connect(str(database), read_only=True) as conn:
+    with _readonly_connect(database) as conn:
         if _table_exists(conn, "main_marts", "fct_ohlcv_daily"):
             df = pl.from_arrow(
                 conn.execute(
@@ -47,7 +71,7 @@ def load_daily_panel(database: str | Path) -> pl.DataFrame:
 
 def load_hourly_panel(database: str | Path) -> pl.DataFrame:
     """Return hourly OHLCV rows sorted for forecasting pipelines."""
-    with duckdb.connect(str(database), read_only=True) as conn:
+    with _readonly_connect(database) as conn:
         df = pl.from_arrow(
             conn.execute(
                 """
@@ -67,7 +91,7 @@ def load_signals_panel(database: str | Path) -> pl.DataFrame:
     wallet intelligence, tweet signals, and event flags.
     Requires the dbt marts layer.
     """
-    with duckdb.connect(str(database), read_only=True) as conn:
+    with _readonly_connect(database) as conn:
         df = pl.from_arrow(
             conn.execute(
                 """
@@ -81,7 +105,7 @@ def load_signals_panel(database: str | Path) -> pl.DataFrame:
 
 def load_wallet_panel(database: str | Path) -> pl.DataFrame:
     """Return daily wallet flow signals from dbt signals layer."""
-    with duckdb.connect(str(database), read_only=True) as conn:
+    with _readonly_connect(database) as conn:
         if _table_exists(conn, "main_signals", "fct_wallet_signals_daily"):
             table = "main_signals.fct_wallet_signals_daily"
         elif _table_exists(conn, "main", "wallet_signals_daily"):
@@ -102,7 +126,7 @@ def load_wallet_panel(database: str | Path) -> pl.DataFrame:
 
 def load_tweet_panel(database: str | Path) -> pl.DataFrame:
     """Return daily tweet mention signals from dbt marts."""
-    with duckdb.connect(str(database), read_only=True) as conn:
+    with _readonly_connect(database) as conn:
         if not _table_exists(conn, "main_marts", "fct_tweet_mentions_daily"):
             return pl.DataFrame()
         df = pl.from_arrow(

@@ -6,6 +6,26 @@ from pathlib import Path
 from typing import Any
 
 import yaml  # type: ignore[import-untyped]
+from dotenv import load_dotenv
+
+
+def load_project_dotenv(start: Path | None = None) -> Path | None:
+    """Load the nearest project ``.env`` with python-dotenv.
+
+    Uses ``override=True`` so ``.env`` values win over VS Code / Cursor notebook
+    env injection (those loaders often keep trailing ``# comments`` on secrets,
+    which breaks FRED/CoinGecko). python-dotenv strips inline comments itself.
+    """
+    root = (start or Path.cwd()).resolve()
+    for candidate in [root, *root.parents]:
+        env_path = candidate / ".env"
+        if env_path.is_file():
+            load_dotenv(env_path, override=True)
+            return env_path
+        if (candidate / "pyproject.toml").is_file():
+            # Stop at repo root even if `.env` is missing
+            break
+    return None
 
 
 @dataclass(frozen=True)
@@ -189,6 +209,7 @@ class AppConfig:
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:
+    load_project_dotenv()
     data: dict[str, Any] = {}
     if path is not None:
         with Path(path).open("r", encoding="utf-8") as handle:

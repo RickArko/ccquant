@@ -89,13 +89,18 @@ OHLCV fallback (daily only).
 - **Key setup (free Demo):**
   1. Sign up at [coingecko.com](https://www.coingecko.com)
   2. Developer Dashboard → Create API key (free Demo)
-  3. Set in `.env`: `CG_DEMO_API_KEY=your_key`
-- **Notes:** The public API without a Demo key is 5-15 calls/min (unstable).
-  The free Demo key gives a stable 30 calls/min. Already wired in
-  `src/ccquant/sources.py` (currently keyless; add Demo key for stability).
+  3. Set in `.env`: `CG_DEMO_API_KEY=your_key` (own line; no inline `#` comments)
+- **Attribution (required when displaying CoinGecko data):** follow
+  [CoinGecko’s attribution guide](https://brand.coingecko.com/resources/attribution-guide) —
+  e.g. visible text **“Data provided by [CoinGecko](https://www.coingecko.com)”**
+  near the chart/table. Notebooks that call the Demo API print this credit when
+  live market data is loaded.
+- **Notes:** The public API without a Demo key is 5-15 calls/min (unstable) and
+  may return HTTP 401. The free Demo key gives a stable 30 calls/min
+  (`x-cg-demo-api-key` header).
 - **ccquant usage:** `sync universe` fetches top-100 by market cap (1-2 calls);
-  daily backfill fallback (~180-day chunks per asset). 100 assets × 2 calls ≈
-  200 calls — well within the 10k/mo free cap.
+  daily backfill fallback (~180-day chunks per asset). `Eth.ipynb` / `BTC.ipynb`
+  use the Demo key for live market-cap series and print the attribution credit.
 
 ---
 
@@ -110,7 +115,8 @@ yields, DXY, VIX, breakeven inflation, Fed funds rate.
 
 - **Key setup:**
   1. Register at [fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html)
-  2. Set in `.env`: `FRED_API_KEY=your_key`
+  2. Set in `.env` on its own line (no trailing `# comment` — VS Code keeps those):
+     `FRED_API_KEY=your_key`
 - **Series used:** `M2SL`, `WALCL`, `DGS10`, `DGS2`, `T10YIE`, `FEDFUNDS`,
   `DTWEXBGS`, `VIXCLS`
 - **Notes:** Completely free, generous limits. Without the key, notebooks

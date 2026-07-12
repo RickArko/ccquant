@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -398,9 +399,9 @@ def transfers_from_solarchive_row(
     block_time = _parse_block_time(
         row.get("block_time") or row.get("block_timestamp")
     )
-    account_keys = row.get("account_keys") or row.get("accounts") or []
-    if isinstance(account_keys, str):
-        account_keys = [account_keys]
+    account_keys = coerce_account_key_list(row.get("account_keys"))
+    if not account_keys:
+        account_keys = coerce_account_key_list(row.get("accounts"))
     keys = [str(k) for k in account_keys]
     matched = [k for k in keys if k in watched]
     if not matched:
@@ -423,6 +424,40 @@ def transfers_from_solarchive_row(
             source="solarchive",
         )
     ]
+
+
+def coerce_account_key_list(value: Any) -> list[Any]:
+    """Normalize parquet/pandas account key cells (lists, ndarrays, JSON strings).
+
+    SolArchive ``accounts`` is typically LIST<STRUCT(pubkey:=..., ...)> which
+    becomes a list of dicts with a ``pubkey`` field after ``fetchdf()``.
+    """
+    if value is None:
+        return []
+    # Avoid ``x or y`` — numpy arrays raise on truthiness
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        value = tolist()
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                return [text]
+            return coerce_account_key_list(parsed)
+        return [text] if text else []
+    if isinstance(value, (list, tuple)):
+        out: list[Any] = []
+        for item in value:
+            if isinstance(item, dict):
+                pubkey = item.get("pubkey") or item.get("Pubkey")
+                if pubkey is not None:
+                    out.append(pubkey)
+            else:
+                out.append(item)
+        return out
+    return [value]
 
 
 def _account_keys(tx: dict[str, Any]) -> list[str]:

@@ -9,9 +9,9 @@ limits, and key setup instructions are in [`documentation/API_Pricing.md`](docum
 ## Commands
 
 ```bash
-uv sync --extra dev                       # lint/test tooling (mypy, pytest, ruff, pre-commit)
-uv sync --extra dev --extra notebook --extra forecast  # + Jupyter/plotly + modeling libs for notebooks
-uv sync --extra dev --extra notebook --extra forecast --extra dbt  # + dbt transforms
+uv sync --extra dev                       # optional alias; plain `uv sync` already installs lint/test + notebooks via dependency-groups.dev
+uv sync --extra forecast                  # optional; forecast libs also in dependency-groups.dev
+uv sync --extra dbt                       # + dbt transforms
 uv run pre-commit install                 # install git hook (run once after clone)
 uv run pre-commit run --all-files         # run all hooks manually
 uv run pytest                             # all tests
@@ -30,7 +30,7 @@ CLI entry point is `ccquant` (`ccquant.cli:main`), a Typer app with subcommands:
 ```bash
 uv run ccquant sync all                    # one-command update: universe + daily + hourly + status
 uv run ccquant sync universe [--size N] [--config FILE]   # fetch top-cap universe + probe exchange pairs
-uv run ccquant sync backfill --interval {1d|1h} [--top N] [--full|--tail] [--config FILE]
+uv run ccquant sync backfill --interval {1d|1h} [--top N] [--full|--tail] [--force] [--config FILE]
 uv run ccquant sync oi [--interval {1d|1h}] [--top N] [--full|--tail]   # open interest (Binance+Bybit+OKX)
 uv run ccquant sync macro                  # FRED macro series
 uv run ccquant sync wallets --no-tail    # wallet registry only (start here; no RPC)
@@ -78,7 +78,10 @@ dbt step (e.g. when dbt isn't installed). Use `--no-wallets` to skip wallet sync
 - `sync backfill` auto-runs `sync universe` when no active assets exist yet.
 - `backfill --full` (default) only does a full historical pull when
   `sync_state.backfill_complete` is false; once complete it falls back to tail-refresh.
-  Use `--tail` to force a short refresh.
+  Use `--tail` to force a short refresh. Use `--force` with `--full` to ignore
+  `backfill_complete` and re-pull full history (needed if an earlier incomplete
+  sync was marked complete, or after Binance geo-blocks left a short series via
+  Coinbase tail-only refreshes).
 
 ## Architecture
 
@@ -105,9 +108,10 @@ dbt step (e.g. when dbt isn't installed). Use `--no-wallets` to skip wallet sync
 - Open interest has per-exchange config toggles (`open_interest.binance/bybit/okx`).
   Disable any exchange in config without breaking the aggregate mart.
 - Optional extras: `uv sync --extra forecast` (numpy/pandas/scikit-learn/statsmodels) and
-  `--extra notebook` (jupyterlab/plotly). `forecasting.py` itself uses only core deps
-  (duckdb, polars) and is always importable; the heavier modeling libs are for future
-  model layers.
+  `--extra notebook` (jupyterlab/plotly/ipykernel; also included in default
+  `dependency-groups.dev` / `--extra dev`). `forecasting.py` itself uses only core deps
+  (duckdb, polars) and is always importable; the heavier modeling libs are for notebooks
+  and future model layers (installed by default via `uv sync`).
 
 ## Coding Style
 

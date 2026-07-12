@@ -165,7 +165,7 @@ def run_bigquery_extract(
 ) -> list[dict[str, Any]]:
     """Run a bounded BigQuery extract when google-cloud-bigquery is installed."""
     try:
-        from google.cloud import bigquery  # type: ignore[import-untyped]
+        from google.cloud import bigquery
     except ImportError as exc:
         raise RuntimeError(
             "google-cloud-bigquery not installed; "

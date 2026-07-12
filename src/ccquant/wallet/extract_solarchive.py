@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -8,7 +7,10 @@ from typing import Any
 import httpx
 
 from ccquant.models import WalletTransfer
-from ccquant.wallet.normalize import transfers_from_solarchive_row
+from ccquant.wallet.normalize import (
+    coerce_account_key_list,
+    transfers_from_solarchive_row,
+)
 
 SOLARCHIVE_INDEX_URL = "https://data.solarchive.org/txs/{date}/index.json"
 HF_PARTITION_API = (
@@ -89,6 +91,41 @@ def _write_bytes(dest: Path, content: bytes) -> None:
     dest.write_bytes(content)
 
 
+def _escape_parquet_path(parquet_path: Path) -> str:
+    return parquet_path.as_posix().replace("'", "''")
+
+
+def _parquet_columns(conn: Any, parquet_path: Path) -> set[str]:
+    escaped = _escape_parquet_path(parquet_path)
+    rows = conn.execute(
+        f"describe select * from read_parquet('{escaped}')"
+    ).fetchall()
+    return {str(row[0]).lower() for row in rows}
+
+
+def _account_list_column(conn: Any, parquet_path: Path) -> str:
+    """SolArchive schemas use ``accounts``; older extracts used ``account_keys``."""
+    cols = _parquet_columns(conn, parquet_path)
+    if "account_keys" in cols:
+        return "account_keys"
+    if "accounts" in cols:
+        return "accounts"
+    raise ValueError(
+        f"SolArchive parquet missing accounts/account_keys columns: {sorted(cols)}"
+    )
+
+
+def _account_list_sql_expr(account_col: str) -> str:
+    """Build a varchar[] of account pubkeys from either schema variant.
+
+    Modern SolArchive uses ``accounts`` as LIST<STRUCT(pubkey, ...)>.
+    Older extracts used ``account_keys`` as LIST<VARCHAR>.
+    """
+    if account_col == "accounts":
+        return f"list_transform(coalesce({account_col}, []), x -> x.pubkey)"
+    return f"coalesce({account_col}, [])"
+
+
 def load_transfers_from_parquet(
     parquet_path: Path,
     *,
@@ -99,17 +136,19 @@ def load_transfers_from_parquet(
     watched_list = list(watched)
     if not watched_list:
         return []
-    escaped = parquet_path.as_posix().replace("'", "''")
-    query = f"""
-        select *
-        from read_parquet('{escaped}')
-        where list_has_any(
-            coalesce(account_keys, []),
-            ?
-        )
-        limit 5000
-    """
+    escaped = _escape_parquet_path(parquet_path)
     try:
+        account_col = _account_list_column(conn, parquet_path)
+        keys_expr = _account_list_sql_expr(account_col)
+        query = f"""
+            select *
+            from read_parquet('{escaped}')
+            where list_has_any(
+                {keys_expr},
+                ?
+            )
+            limit 5000
+        """
         rows = conn.execute(query, [watched_list]).fetchdf().to_dict("records")
     except Exception:
         rows = _load_parquet_fallback(parquet_path, watched_list, conn)
@@ -126,7 +165,7 @@ def _load_parquet_fallback(
     watched: list[str],
     conn: Any,
 ) -> list[dict[str, Any]]:
-    escaped = parquet_path.as_posix().replace("'", "''")
+    escaped = _escape_parquet_path(parquet_path)
     try:
         df = conn.execute(
             f"select * from read_parquet('{escaped}') limit 2000"
@@ -137,9 +176,9 @@ def _load_parquet_fallback(
     filtered: list[dict[str, Any]] = []
     watched_set = set(watched)
     for row in records:
-        keys = row.get("account_keys") or row.get("accounts") or []
-        if isinstance(keys, str):
-            keys = json.loads(keys) if keys.startswith("[") else [keys]
+        keys = coerce_account_key_list(row.get("account_keys"))
+        if not keys:
+            keys = coerce_account_key_list(row.get("accounts"))
         if any(str(k) in watched_set for k in keys):
             filtered.append(row)
     return filtered
