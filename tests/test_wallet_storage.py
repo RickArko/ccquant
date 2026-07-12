@@ -489,6 +489,42 @@ def test_load_seed_identity_links_parses_linked_at(tmp_path) -> None:
     assert links[0].linked_at == datetime(2024, 3, 15, 12, tzinfo=UTC)
 
 
+def test_load_seed_identity_links_rejects_invalid_linked_at(tmp_path) -> None:
+    from ccquant.wallet.seeds import load_seed_identity_links
+
+    seed = tmp_path / "links.csv"
+    seed.write_text(
+        "address,chain,identity_id,link_type,confidence,source,linked_at\n"
+        "bc1qtest,bitcoin,strategy,owns,0.9,manual,not-a-timestamp\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="invalid linked_at"):
+        load_seed_identity_links(seed)
+
+
+def test_rows_to_transfers_bitcoin_keeps_outflow_for_watched_address() -> None:
+    from ccquant.wallet.extract_bigquery import rows_to_transfers
+
+    watched = {"1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj"}
+    rows = [
+        {
+            "hash": "tx1",
+            "block_time": datetime(2024, 1, 1, tzinfo=UTC),
+            "leg_index": 0,
+            "address": "1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj",
+            "value_sats": 100_000_000,
+            "script_type": "p2pkh",
+            "direction": "outflow",
+            "counterparty": "34xp4vRoCG5Jh1B5fszvzu5uBmM2a5jSNi",
+        }
+    ]
+    transfers = rows_to_transfers(rows, chain="bitcoin", watched=watched)
+    assert len(transfers) == 1
+    assert transfers[0].direction == "outflow"
+    assert transfers[0].from_address == "1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj"
+    assert transfers[0].to_address == "34xp4vRoCG5Jh1B5fszvzu5uBmM2a5jSNi"
+
+
 def test_build_bitcoin_bigquery_sql_filters_addresses() -> None:
     from datetime import date
 
@@ -586,6 +622,64 @@ async def test_sync_all_no_tail_skips_history_and_tail(tmp_path) -> None:
         assert "tail" not in counts
         backfill.assert_not_called()
         tail.assert_not_called()
+    finally:
+        await syncer.close()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_tail_refresh_skips_bitcoin_when_chain_disabled(tmp_path) -> None:
+    from dataclasses import replace
+    from unittest.mock import AsyncMock, patch
+
+    from ccquant.config import load_config
+    from ccquant.wallet.sync import WalletSync
+
+    base_cfg = load_config()
+    cfg = replace(
+        base_cfg,
+        database=tmp_path / "ccquant.duckdb",
+        wallet_tracking=replace(
+            base_cfg.wallet_tracking,
+            chains=["solana", "arbitrum"],
+        ),
+    )
+    store = MarketStore(cfg.database)
+    now = datetime.now(tz=UTC)
+    store.upsert_wallet_registry(
+        [
+            WalletRegistryEntry(
+                address="1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj",
+                chain="bitcoin",
+                label="BTC Wallet",
+                entity_type="whale",
+                confidence=0.9,
+                source="manual",
+                discovered_at=now,
+                active=True,
+            )
+        ]
+    )
+    syncer = WalletSync(store, cfg)
+    try:
+        with (
+            patch(
+                "ccquant.wallet.sync.tail_solana_wallets",
+                AsyncMock(return_value=[]),
+            ) as tail_solana,
+            patch(
+                "ccquant.wallet.sync.tail_arbitrum_wallets",
+                AsyncMock(return_value=[]),
+            ) as tail_arbitrum,
+            patch(
+                "ccquant.wallet.sync.tail_bitcoin_wallets",
+                AsyncMock(return_value=[]),
+            ) as tail_bitcoin,
+        ):
+            await syncer.tail_refresh()
+        tail_solana.assert_not_called()
+        tail_arbitrum.assert_not_called()
+        tail_bitcoin.assert_not_called()
     finally:
         await syncer.close()
         store.close()

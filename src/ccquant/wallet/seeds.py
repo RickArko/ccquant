@@ -63,8 +63,8 @@ def _parse_linked_at(value: str | None) -> datetime:
     try:
         parsed = datetime.fromisoformat(raw)
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-    except ValueError:
-        return datetime.now(tz=UTC)
+    except ValueError as exc:
+        raise ValueError(f"invalid linked_at: {value!r}") from exc
 
 
 def load_seed_identity_links(path: Path) -> list[WalletIdentityLink]:

@@ -8,6 +8,7 @@ from ccquant.wallet.normalize import (
     transfer_from_bitcoin_bq_row,
     transfers_from_arbitrum_tx,
     transfers_from_solarchive_row,
+    watched_address,
 )
 
 
@@ -194,10 +195,8 @@ def rows_to_transfers(
             )
         elif chain == "bitcoin":
             transfer = transfer_from_bitcoin_bq_row(row, source="bigquery")
-            if transfer is not None:
-                watched_addr = transfer.to_address or transfer.from_address
-                if watched_addr in watched:
-                    transfers.append(transfer)
+            if transfer is not None and watched_address(transfer) in watched:
+                transfers.append(transfer)
     return transfers
 
 

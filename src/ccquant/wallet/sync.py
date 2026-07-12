@@ -178,25 +178,26 @@ class WalletSync:
                 self._registry_map(),
             )
             self.store.upsert_wallet_alerts(alerts)
-        bitcoin_addrs = self._limited_addresses("bitcoin")
-        if bitcoin_addrs:
-            transfers = await tail_bitcoin_wallets(
-                self._client,
-                api_url=cfg.tail.bitcoin_api_url,
-                addresses=bitcoin_addrs,
-                delay_seconds=cfg.tail.request_delay_seconds,
-            )
-            total += self.store.upsert_wallet_transfers(transfers)
-            self._update_sync_states(
-                transfers,
-                chain="bitcoin",
-                source="mempool_tail",
-            )
-            alerts = detect_alerts(
-                transfers,
-                self._registry_map(),
-            )
-            self.store.upsert_wallet_alerts(alerts)
+        if "bitcoin" in cfg.chains:
+            bitcoin_addrs = self._limited_addresses("bitcoin")
+            if bitcoin_addrs:
+                transfers = await tail_bitcoin_wallets(
+                    self._client,
+                    api_url=cfg.tail.bitcoin_api_url,
+                    addresses=bitcoin_addrs,
+                    delay_seconds=cfg.tail.request_delay_seconds,
+                )
+                total += self.store.upsert_wallet_transfers(transfers)
+                self._update_sync_states(
+                    transfers,
+                    chain="bitcoin",
+                    source="mempool_tail",
+                )
+                alerts = detect_alerts(
+                    transfers,
+                    self._registry_map(),
+                )
+                self.store.upsert_wallet_alerts(alerts)
         return total
 
     async def _backfill_solarchive(self) -> int:
