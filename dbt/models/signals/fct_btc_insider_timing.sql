@@ -27,7 +27,7 @@ btc_price as (
   select
     date,
     close,
-    close / lag(close, 7) over (order by date) - 1 as fwd_return_7d
+    lead(close, 7) over (order by date) / nullif(close, 0) - 1 as fwd_return_7d
   from {{ ref('fct_ohlcv_daily') }}
   where symbol = 'BTC'
 ),

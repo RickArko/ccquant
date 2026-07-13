@@ -107,7 +107,7 @@ class WalletDiscoveryConfig:
 class WalletTrackingConfig:
     enabled: bool = True
     chains: list[str] = field(
-        default_factory=lambda: ["solana", "arbitrum", "bitcoin"]
+        default_factory=lambda: ["solana", "arbitrum"]
     )
     seed_file: Path = field(
         default_factory=lambda: Path("config/seeds/wallet_registry_seed.csv")
