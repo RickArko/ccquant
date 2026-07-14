@@ -190,7 +190,6 @@ def transfers_from_bitcoin_tx(
     all_input_addresses: list[str] = []
     all_output_addresses: list[str] = []
     transfers: list[WalletTransfer] = []
-    index = 0
 
     outputs = tx.get("outputs") or tx.get("vout") or []
     if isinstance(outputs, list):
@@ -213,7 +212,7 @@ def transfers_from_bitcoin_tx(
                     all_input_addresses.append(norm)
 
     if isinstance(outputs, list):
-        for output in outputs:
+        for offset, output in enumerate(outputs):
             if not isinstance(output, dict):
                 continue
             value_sats = _parse_satoshi(
@@ -225,6 +224,7 @@ def transfers_from_bitcoin_tx(
                 or output.get("scriptpubkey_type")
                 or "output"
             )
+            leg_index = _btc_leg_index(output, offset)
             addresses = _btc_output_addresses(output)
             for address in addresses:
                 norm = _normalize_btc_address(address)
@@ -234,7 +234,7 @@ def transfers_from_bitcoin_tx(
                     WalletTransfer(
                         chain="bitcoin",
                         tx_hash=tx_hash,
-                        transfer_index=index,
+                        transfer_index=leg_index,
                         block_time=block_time,
                         from_address=_first_btc_counterparty(
                             all_input_addresses,
@@ -251,10 +251,9 @@ def transfers_from_bitcoin_tx(
                         source=source,
                     )
                 )
-                index += 1
 
     if isinstance(inputs, list):
-        for inp in inputs:
+        for offset, inp in enumerate(inputs):
             if not isinstance(inp, dict):
                 continue
             if inp.get("is_coinbase"):
@@ -268,6 +267,7 @@ def transfers_from_bitcoin_tx(
                 or (inp.get("prevout") or {}).get("scriptpubkey_type")
                 or "input"
             )
+            leg_index = _btc_leg_index(inp, offset)
             addresses = _btc_input_addresses(inp)
             for address in addresses:
                 norm = _normalize_btc_address(address)
@@ -277,7 +277,7 @@ def transfers_from_bitcoin_tx(
                     WalletTransfer(
                         chain="bitcoin",
                         tx_hash=tx_hash,
-                        transfer_index=index,
+                        transfer_index=leg_index,
                         block_time=block_time,
                         from_address=norm,
                         to_address=_first_btc_counterparty(
@@ -294,13 +294,25 @@ def transfers_from_bitcoin_tx(
                         source=source,
                     )
                 )
-                index += 1
 
     return transfers
 
 
 def _normalize_btc_address(address: str) -> str:
     return address.strip()
+
+
+def _btc_leg_index(leg: dict[str, Any], offset: int) -> int:
+    """Deterministic UTXO leg index matching BigQuery output/input.index."""
+    for key in ("index", "n"):
+        raw = leg.get(key)
+        if raw is None or raw == "":
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return offset
 
 
 def _first_btc_counterparty(

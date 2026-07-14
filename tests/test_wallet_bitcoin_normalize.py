@@ -30,7 +30,34 @@ def test_transfers_from_bitcoin_tx_output_inflow() -> None:
     assert transfers[0].direction == "inflow"
     assert transfers[0].to_address == "1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj"
     assert transfers[0].amount == 0.5
+    assert transfers[0].transfer_index == 0
     assert transfers[0].asset_mint_or_contract == BTC_ASSET
+
+
+def test_transfers_from_bitcoin_tx_uses_leg_index_not_watched_counter() -> None:
+    watched = {"1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj"}
+    tx = {
+        "txid": "leg-idx",
+        "status": {"block_time": 1_700_000_000},
+        "vin": [],
+        "vout": [
+            {
+                "n": 0,
+                "value": 10_000_000,
+                "scriptpubkey_type": "p2pkh",
+                "scriptpubkey_address": "34xp4vRoCG5Jh1B5fszvzu5uBmM2a5jSNi",
+            },
+            {
+                "n": 2,
+                "value": 50_000_000,
+                "scriptpubkey_type": "p2pkh",
+                "scriptpubkey_address": "1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj",
+            },
+        ],
+    }
+    transfers = transfers_from_bitcoin_tx(tx, watched=watched, source="mempool")
+    assert len(transfers) == 1
+    assert transfers[0].transfer_index == 2
 
 
 def test_transfers_from_bitcoin_tx_input_outflow() -> None:
@@ -61,6 +88,7 @@ def test_transfers_from_bitcoin_tx_input_outflow() -> None:
     assert outflows[0].from_address == "1NDyJtNTjmwk5xPNe21PaRLLJ46W4hKEMj"
     assert outflows[0].to_address == "34xp4vRoCG5Jh1B5fszvzu5uBmM2a5jSNi"
     assert outflows[0].amount == 1.0
+    assert outflows[0].transfer_index == 0
 
 
 def test_transfer_from_bitcoin_bq_row() -> None:
