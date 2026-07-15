@@ -134,6 +134,15 @@ on-chain activity (fees, TVL, staking, net issuance), an exploratory
 OLS bootstrap forecasts at 1y / 2y / 4y. Degrades to synthetic on-chain/macro
 series when API keys are absent.
 
+### DeFi Aggregate — Multi-Chain Activity (`DEFI.ipynb`)
+
+Cross-chain DeFi dashboard from keyless DefiLlama (global + per-chain TVL, DEX
+volume, fees), weekly activity-composite regimes, curated legislation/shock
+overlays from `dbt/seeds/events.csv`, and a rule-based outlook snapshot. Includes
+a crypto-native Trump panel ($TRUMP / WLFI via CoinGecko, DefiLlama protocol
+probe, public TRUMP mint seed) — DJT equity out of scope. Degrades to synthetic
+aggregates when network/API data is unavailable.
+
 ### Macro Trend-Change Signals (`Macro.ipynb`)
 
 Predicts monetary-policy / liquidity regime changes. Builds a Global Liquidity

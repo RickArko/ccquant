@@ -55,3 +55,5 @@ bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh,bitcoin,Marathon Digital Wallet,insid
 3JZq4at6ggGm1mTkMEHwqWN4H5RoJSRngL,bitcoin,BitMEX Hot Wallet,exchange,0.85,manual,"{""project"":""BitMEX"",""subtype"":""hot_wallet""}"
 bc1q9vza2e8x573ncazrl9adg5ngst8ht505dvqp9,bitcoin,ETF Custody Wallet,insider,0.75,manual,"{""project"":""ETF"",""subtype"":""custody""}"
 1Ay8vMCeF7dtAeJEUzgPWj9stAC4DQ1psy,bitcoin,Early Whale Wallet,whale,0.65,heuristic,"{""note"":""historical accumulator""}"
+6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN,solana,Official TRUMP Mint,token,1.00,manual,"{""symbol"":""TRUMP"",""project"":""Official Trump"",""coingecko_id"":""official-trump"",""note"":""public mint; not a personal wallet""}"
+WLFinEv6ypjkczcS83FZqFpgFZYwQXutRbxGe7oC16g,solana,WLFI Token Mint,token,1.00,manual,"{""symbol"":""WLFI"",""project"":""World Liberty Financial"",""coingecko_id"":""world-liberty-financial"",""note"":""public mint; not a personal wallet""}"

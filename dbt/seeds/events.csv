@@ -1,5 +1,13 @@
 date,category,title,description,asset_scope,anticipated_effect_direction,magnitude,confidence,source_url
+2022-05-09,market,"Terra/LUNA UST depeg","UST stablecoin depegs cascading into LUNA collapse; major DeFi TVL shock",DEFI,negative,high,high,https://www.coindesk.com
+2022-11-11,market,"FTX bankruptcy filing","FTX/Alameda collapse freezes CeFi liquidity and hits DeFi risk appetite",DEFI,negative,high,high,https://www.coindesk.com
+2023-06-06,regulatory,"SEC sues Coinbase and Binance window","US SEC intensifies exchange enforcement; DeFi/CEX regulatory risk premium rises",DEFI,negative,medium,medium,https://www.sec.gov
+2023-06-09,legislative,"EU MiCA published in Official Journal","Markets in Crypto-Assets Regulation enters EU Official Journal; stablecoin/CASP rules path set",DEFI,neutral,medium,high,https://eur-lex.europa.eu
 2024-01-11,regulatory,"SEC approves Bitcoin ETFs","SEC approves spot Bitcoin ETFs including BlackRock, Fidelity, Ark Invest",BTC,positive,high,high,https://www.sec.gov
 2024-04-20,halving,"Bitcoin halving","Fourth Bitcoin halving reducing block reward from 6.25 to 3.125 BTC",BTC,positive,medium,high,https://bitcoinhalving.app
+2024-05-22,legislative,"US House passes FIT21","Financial Innovation and Technology for the 21st Century Act passes House; DeFi market-structure signal",DEFI,positive,medium,medium,https://www.congress.gov
 2024-08-28,monetary,"Powell Jackson Hole speech","Fed Chair signals rate cuts coming at September FOMC meeting",BTC,positive,medium,medium,https://www.federalreserve.gov
-2025-01-20,legislative,"US Presidential inauguration","New administration expected to be more crypto-friendly",BTC,positive,low,low,https://www.whitehouse.gov
+2024-09-18,monetary,"Fed begins rate-cut cycle","FOMC delivers first cut of easing cycle; liquidity impulse for risk assets and DeFi",DEFI,positive,medium,high,https://www.federalreserve.gov
+2025-01-17,political,"Official TRUMP memecoin launch","Official $TRUMP Solana memecoin launches via gettrumpmemes.com channels",DEFI,positive,medium,medium,https://gettrumpmemes.com
+2025-01-20,legislative,"US Presidential inauguration","New administration expected to be more crypto-friendly",DEFI,positive,medium,medium,https://www.whitehouse.gov
+2025-03-06,political,"White House crypto summit signal","Administration crypto summit / strategic reserve narrative lifts policy-beta assets",DEFI,positive,low,low,https://www.whitehouse.gov

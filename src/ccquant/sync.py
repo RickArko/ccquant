@@ -41,6 +41,8 @@ KNOWN_COINGECKO_IDS = {
     "SOL": "solana",
     "PAXG": "pax-gold",
     "HYPE": "hyperliquid",
+    "TRUMP": "official-trump",
+    "WLFI": "world-liberty-financial",
 }
 
 
