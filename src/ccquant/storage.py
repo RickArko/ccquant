@@ -44,7 +44,10 @@ class MarketStore:
         return self._conn
 
     def close(self) -> None:
+        if getattr(self, "_closed", False):
+            return
         self._conn.close()
+        self._closed = True
 
     def init_schema(self) -> None:
         self._conn.execute(
