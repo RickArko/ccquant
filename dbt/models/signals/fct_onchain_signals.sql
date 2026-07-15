@@ -1,7 +1,8 @@
 {{
     config(
         materialized='table',
-        schema='signals'
+        schema='signals',
+        tags=['macro']
     )
 }}
 
@@ -22,4 +23,3 @@ select
   max(case when metric = 'realized_price' then value end) as realized_price
 from {{ ref('stg_onchain_series') }}
 group by date
-order by date

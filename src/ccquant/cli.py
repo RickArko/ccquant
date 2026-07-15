@@ -94,17 +94,26 @@ def sync_backfill(
         typer.Option("--interval", "-i", help="1d or 1h"),
     ] = "1d",
     full: bool = typer.Option(True, "--full/--tail"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Ignore sync_state.backfill_complete and re-pull full history",
+    ),
     top: int | None = typer.Option(None, "--top", help="Limit to top-N ranked assets"),
 ) -> None:
     """Backfill or tail-refresh OHLCV data."""
     if interval not in {"1d", "1h"}:
         raise typer.BadParameter("interval must be 1d or 1h")
+    if force and not full:
+        raise typer.BadParameter("--force requires --full (omit --tail)")
     store, cfg = _load(config)
     syncer = MarketSync(store, cfg)
 
     async def run() -> dict[str, int]:
         try:
-            return await syncer.backfill(interval=interval, full=full, top=top)
+            return await syncer.backfill(
+                interval=interval, full=full, top=top, force=force
+            )
         finally:
             await syncer.close()
             store.close()
@@ -175,7 +184,11 @@ def sync_macro(
 def sync_wallets(
     config: str | None = typer.Option(None, "--config", "-c"),
     full: bool = typer.Option(False, "--full/--no-full"),
-    no_tail: bool = typer.Option(False, "--no-tail", help="Skip RPC tail refresh"),
+    no_tail: bool = typer.Option(
+        False,
+        "--no-tail",
+        help="Registry only: skip history backfill and RPC tail refresh",
+    ),
 ) -> None:
     """Sync wallet registry, historical extracts, and tail activity."""
     store, cfg = _load(config)
@@ -183,7 +196,11 @@ def sync_wallets(
 
     async def run() -> dict[str, int]:
         try:
-            return await syncer.sync_all(full=full, tail=not no_tail)
+            return await syncer.sync_all(
+                full=full,
+                tail=not no_tail,
+                history=not no_tail,
+            )
         finally:
             await syncer.close()
 
@@ -421,6 +438,8 @@ def _export(config: str | None, out: Path, *, fmt: str) -> None:
             "wallet_sync_state",
             "wallet_signals_daily",
             "wallet_alerts",
+            "wallet_identities",
+            "wallet_identity_links",
             "twitter_accounts",
             "tweets",
             "tweet_entities",
@@ -472,7 +491,11 @@ def db_backup(
 @wallet_app.command("discover")
 def wallet_discover(
     config: str | None = typer.Option(None, "--config", "-c"),
-    chain: str = typer.Option("solana", "--chain", help="solana, arbitrum, ethereum"),
+    chain: str = typer.Option(
+        "solana",
+        "--chain",
+        help="solana, arbitrum, ethereum, or bitcoin",
+    ),
     top: int = typer.Option(20, "--top", help="Number of wallets to discover"),
 ) -> None:
     """Discover labeled wallets from Flipside (or heuristic fallback)."""
@@ -498,6 +521,11 @@ def wallet_import_extract(
         "--source",
         help="solarchive or bigquery",
     ),
+    chain: str = typer.Option(
+        "solana",
+        "--chain",
+        help="solana, arbitrum, or bitcoin (bigquery only for bitcoin)",
+    ),
     partition_date: str | None = typer.Option(
         None, "--date", help="Partition date YYYY-MM-DD for solarchive"
     ),
@@ -520,6 +548,7 @@ def wallet_import_extract(
             await syncer.load_registry()
             return await syncer.import_extract(
                 source=source,
+                chain=chain.lower(),
                 partition_date=parsed_date,
                 parquet_path=parquet,
             )

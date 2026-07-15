@@ -108,6 +108,41 @@ under load. For tail monitoring, set `wallet_tracking.tail.solana_rpc_url` to a
 dedicated endpoint (Helius, QuickNode, etc.) and reduce `max_wallets` in
 [`config/example.yaml`](../config/example.yaml).
 
+## Bitcoin insider wallets (Tier 1–3)
+
+### Tier 1 — Performance-based (BTC)
+
+| Method | Source | Signal |
+|---|---|---|
+| Large accumulation | `fct_btc_insider_moves` | ≥10 BTC or ≥$100k USD notional |
+| Timing score | `fct_btc_insider_timing` | Netflow before 7d BTC rally |
+| Exchange flows | Seed exchange hot/cold wallets | Inflow/outflow vs price |
+
+### Tier 2 — Identity resolution (BTC)
+
+| Method | Channel | Steps |
+|---|---|---|
+| Public treasury filings | SEC / company disclosures | Map to `wallet_identities_seed.csv` |
+| ETF custodian addresses | Issuer docs, Woobull/LookIntoBitcoin dashboards | Manual seed + `wallet_identity_links` |
+| Tweet BTC addresses | Twitter import | `btc_address` entities → registry join |
+| Flipside labels | `ccquant wallet discover --chain bitcoin` | `miner`/`institution` → `insider` |
+
+```bash
+uv run ccquant sync wallets --no-tail
+uv run ccquant wallet import-extract --source bigquery --chain bitcoin
+uv run ccquant wallet discover --chain bitcoin --top 20
+uv run ccquant wallet alerts --since 168
+```
+
+### Tier 3 — Cluster / cabal detection (BTC)
+
+Implemented in dbt (`fct_wallet_insider_clusters`):
+
+- **Shared funder** — multiple identity-linked wallets funded from same source
+- **Co-move window** — ≥2 insider wallets accumulate within 1 hour
+
+Query counterparties: `main_signals.fct_btc_wallet_counterparties`.
+
 ## Backup and rollback
 
 ```bash
@@ -118,6 +153,6 @@ uv run ccquant db backup --dest data/backups --keep 10
 cp data/backups/ccquant-YYYYMMDD-HHMMSS.duckdb data/ccquant.duckdb
 
 # Rebuild dbt wallet models after restore
-uv run dbt run --select stg_wallet_* fct_wallet_* --project-dir dbt --profiles-dir dbt
+uv run dbt run --select stg_wallet_* fct_wallet_* fct_btc_* --project-dir dbt --profiles-dir dbt
 uv run dbt run --select mart_signals_daily --full-refresh --project-dir dbt --profiles-dir dbt
 ```

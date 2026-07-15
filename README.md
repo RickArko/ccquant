@@ -9,24 +9,52 @@ statistical, ML, and foundation-model experiments.
 ## Quickstart
 
 ```bash
-# Full local install (simplest — all extras + dependency groups)
+# Default local install — lint/test (pre-commit) + ipykernel + Jupyter/plotly +
+# forecast libs (`dependency-groups.dev` is on by default)
+uv sync
+uv run python -m ipykernel install --user --name=ccquant --display-name="Python (ccquant)"
+uv run pre-commit install
+
+# Full local install (all extras + dependency groups)
 uv sync --all-extras --all-groups
 
 # Or pick tiers explicitly:
-# CLI + tests only
+# CLI + tests + notebooks (same notebook packages as default `uv sync`)
 uv sync --extra dev
 
-# Notebooks (BTC, Macro, OnChain_BTC, Wallet_SOL)
-uv sync --extra dev --extra notebook --extra forecast
+# + forecasting libs (also in default dependency-groups.dev now)
+uv sync --extra dev --extra forecast
 
-# Full pipeline incl. dbt + wallet/BigQuery (same as --all-extras --all-groups)
-uv sync --extra dev --extra notebook --extra forecast --extra dbt --extra wallet
+# Full pipeline incl. dbt + wallet/BigQuery
+uv sync --extra dev --extra forecast --extra dbt --extra wallet
 
 uv run ccquant sync all                     # one-command update: universe + daily + hourly + status
 uv run ccquant sync universe --size 100
 uv run ccquant sync backfill --interval 1d
+# If history looks too short (e.g. after a geo-blocked Binance run marked complete):
+# uv run ccquant sync backfill --interval 1d --force --top 50
 uv run ccquant sync backfill --interval 1h --top 10
 uv run ccquant status
+```
+
+**Notebooks in VS Code / Cursor:** after `uv sync`, select the project interpreter
+(`.venv/bin/python`) or the **Python (ccquant)** kernel when opening any `.ipynb`.
+Missing `ipykernel` usually means the env was created with `uv sync --no-dev` or
+the wrong interpreter is selected.
+
+Alternatively launch JupyterLab:
+
+```bash
+uv run jupyter lab notebooks/
+```
+
+### Wallet intelligence (Solana + Arbitrum + Bitcoin)
+
+```bash
+uv run ccquant sync wallets --no-tail
+uv run ccquant wallet import-extract --source bigquery --chain bitcoin
+uv run ccquant wallet discover --chain bitcoin --top 20
+uv run dbt build --select fct_btc_* fct_wallet_* mart_signals_daily --project-dir dbt --profiles-dir dbt
 ```
 
 By default, data is stored at `data/ccquant.duckdb`. Override it with:
@@ -67,10 +95,17 @@ Keep data ingestion deterministic and boring. Add models in layers:
 
 ## Notebooks
 
-Three research notebooks in `notebooks/` — each runs top-to-bottom, loads `.env`
+Research notebooks in `notebooks/` — each runs top-to-bottom, loads `.env`
 for API keys, and degrades gracefully to synthetic data when keys are absent.
-Install notebook deps first: `uv sync --extra notebook --extra forecast`
-(or `uv sync --all-extras --all-groups` for everything).
+
+```bash
+uv sync                                    # default: includes ipykernel + Jupyter/plotly + forecast libs
+uv run python -m ipykernel install --user --name=ccquant --display-name="Python (ccquant)"
+# or: uv sync --all-extras --all-groups
+```
+
+In **VS Code / Cursor**: open the `.ipynb` → kernel picker → choose
+`.venv` / **Python (ccquant)**. In a terminal: `uv run jupyter lab notebooks/`.
 
 ### BTC Long-Term Price Forecast (`BTC.ipynb`)
 
@@ -89,6 +124,15 @@ at 1y / 2y / 4y horizons.
 </p>
 
 <p align="center"><em>Calibrated bootstrap forecast fan (50% / 80% / 95% bands) with ARIMA median cross-check. Intervals are conformal-rescaled to achieve empirical coverage.</em></p>
+
+### ETH Long-Term Value & Price Research (`Eth.ipynb`)
+
+Long-horizon Ether analysis combining FRED liquidity regimes, notebook-local ETH
+on-chain activity (fees, TVL, staking, net issuance), an exploratory
+**stock-to-flow** frame (supply / annualized net issuance post-Merge), a protocol
+**fee/burn DCF** fair-value band, early-signal lead/lag + Probit, and calibrated
+OLS bootstrap forecasts at 1y / 2y / 4y. Degrades to synthetic on-chain/macro
+series when API keys are absent.
 
 ### Macro Trend-Change Signals (`Macro.ipynb`)
 

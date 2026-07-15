@@ -19,6 +19,8 @@ def detect_alerts(
     for transfer in transfers:
         if transfer.block_time < cutoff:
             continue
+        if not _meets_alert_threshold(transfer):
+            continue
         watched = watched_address(transfer)
         entry = registry.get((watched, transfer.chain))
         if entry is None:
@@ -43,6 +45,16 @@ def detect_alerts(
     return alerts
 
 
+def _meets_alert_threshold(transfer: WalletTransfer) -> bool:
+    if transfer.chain != "bitcoin":
+        return True
+    if transfer.amount >= 10.0:
+        return True
+    return (
+        transfer.amount_usd is not None and transfer.amount_usd >= 100_000
+    )
+
+
 def _action_for_transfer(
     transfer: WalletTransfer,
     entry: WalletRegistryEntry,
@@ -53,7 +65,7 @@ def _action_for_transfer(
 
 
 def _severity(entity_type: str, direction: str) -> str:
-    high_types = {"kol", "smart_money", "insider_cluster"}
+    high_types = {"kol", "smart_money", "insider_cluster", "insider"}
     if entity_type in high_types and direction == "inflow":
         return "high"
     if entity_type == "deployer":

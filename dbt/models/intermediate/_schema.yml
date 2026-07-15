@@ -1,0 +1,56 @@
+version: 2
+
+models:
+  - name: int_ohlcv_daily_deduped
+    description: Source-priority deduplicated daily OHLCV (binance > coinbase > coingecko).
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+      - name: date
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - symbol
+            - date
+
+  - name: int_oi_usd_normalized
+    description: Open interest normalized to USD notional using daily close prices.
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+      - name: timestamp
+        tests:
+          - not_null
+      - name: exchange
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - symbol
+            - timestamp
+            - exchange
+            - interval
+
+  - name: int_events_by_date
+    description: Daily rollup of curated events with positive/negative flags.
+    columns:
+      - name: event_date
+        tests:
+          - not_null
+          - unique
+
+  - name: int_symbol_chain_bridge
+    description: Maps asset symbols to on-chain networks for wallet signal joins.
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+          - unique
+      - name: chain
+        tests:
+          - not_null

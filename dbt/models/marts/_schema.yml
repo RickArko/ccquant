@@ -91,6 +91,66 @@ models:
             - timestamp
             - interval
 
+  - name: fct_tweet_mentions_daily
+    description: Daily tweet mention counts per symbol from staging layer.
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: symbol
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - symbol
+
+  - name: fct_tweet_wallet_mentions
+    description: Tweet mentions of tracked wallet addresses.
+    columns:
+      - name: tweet_id
+        tests:
+          - not_null
+      - name: address
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - tweet_id
+            - address
+
+  - name: fct_tweet_account_activity
+    description: Daily tweet activity aggregates per account handle.
+    columns:
+      - name: handle
+        tests:
+          - not_null
+      - name: date
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - handle
+            - date
+
+  - name: fct_tweet_spike_events
+    description: Symbols with tweet mention z-score >= 2.0.
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: symbol
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - symbol
+
   - name: mart_signals_daily
     description: >
       Canonical daily analytics panel joining price, open interest, on-chain
@@ -100,6 +160,9 @@ models:
       - name: symbol
         tests:
           - not_null
+          - relationships:
+              to: ref('dim_assets')
+              field: symbol
       - name: date
         tests:
           - not_null

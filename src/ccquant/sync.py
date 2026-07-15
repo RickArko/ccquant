@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import UTC, date, datetime, timedelta
 
 import httpx
@@ -102,6 +103,7 @@ class MarketSync:
         interval: str,
         full: bool,
         top: int | None = None,
+        force: bool = False,
     ) -> dict[str, int]:
         if not self.store.active_assets():
             await self.update_universe()
@@ -111,11 +113,11 @@ class MarketSync:
             try:
                 if interval == "1h":
                     results[asset.symbol] = await self.backfill_hourly(
-                        asset, full=full
+                        asset, full=full, force=force
                     )
                 else:
                     results[asset.symbol] = await self.backfill_daily(
-                        asset, full=full
+                        asset, full=full, force=force
                     )
             except httpx.HTTPError as exc:
                 LOGGER.warning(
@@ -128,12 +130,16 @@ class MarketSync:
             await asyncio.sleep(self.config.universe.request_delay_seconds)
         return results
 
-    async def backfill_daily(self, asset: Asset, *, full: bool) -> int:
+    async def backfill_daily(
+        self, asset: Asset, *, full: bool, force: bool = False
+    ) -> int:
         today = datetime.now(tz=UTC).date()
         state = self.store.get_state(asset.symbol, "1d") or SyncState(
             symbol=asset.symbol,
             interval="1d",
         )
+        if force:
+            state.backfill_complete = False
         start = None if full and not state.backfill_complete else (
             today - timedelta(days=self.config.daily.tail_days)
         )
@@ -143,7 +149,9 @@ class MarketSync:
         self.store.upsert_state(state)
         return count
 
-    async def backfill_hourly(self, asset: Asset, *, full: bool) -> int:
+    async def backfill_hourly(
+        self, asset: Asset, *, full: bool, force: bool = False
+    ) -> int:
         now = datetime.now(tz=UTC).replace(minute=0, second=0, microsecond=0)
         state = self.store.get_state(asset.symbol, "1h") or SyncState(
             symbol=asset.symbol,
@@ -151,13 +159,13 @@ class MarketSync:
         )
         hours = (
             self.config.hourly.history_days * 24
-            if full
+            if full or force
             else self.config.hourly.tail_hours
         )
         start = now - timedelta(hours=hours)
         candles = await self._fetch_hourly(asset, start=start, end=now)
         count = self.store.upsert_hourly(candles)
-        _update_state(state, [c.hour for c in candles], full=full)
+        _update_state(state, [c.hour for c in candles], full=full or force)
         self.store.upsert_state(state)
         return count
 
@@ -255,9 +263,7 @@ class MarketSync:
         macro_cfg = self.config.macro
         if not macro_cfg.enabled:
             return {}
-        import os
-
-        api_key = os.environ.get("FRED_API_KEY", "")
+        api_key = os.environ.get("FRED_API_KEY", "").strip()
         if not api_key:
             LOGGER.warning("FRED_API_KEY not set — skipping macro sync")
             return {}
@@ -300,11 +306,7 @@ class MarketSync:
                 if candles:
                     return candles
             except httpx.HTTPError as exc:
-                LOGGER.warning(
-                    "Binance daily fetch failed for %s: %s",
-                    asset.symbol,
-                    exc,
-                )
+                LOGGER.warning("%s", _binance_fallback_msg(asset.symbol, "daily", exc))
 
         if asset.coinbase_product_id:
             try:
@@ -350,11 +352,7 @@ class MarketSync:
                 if candles:
                     return candles
             except httpx.HTTPError as exc:
-                LOGGER.warning(
-                    "Binance hourly fetch failed for %s: %s",
-                    asset.symbol,
-                    exc,
-                )
+                LOGGER.warning("%s", _binance_fallback_msg(asset.symbol, "hourly", exc))
         if asset.coinbase_product_id:
             try:
                 return await fetch_coinbase_hourly(
@@ -393,6 +391,17 @@ class MarketSync:
             active=True,
             as_of_date=as_of,
         )
+
+
+def _binance_fallback_msg(symbol: str, interval: str, exc: httpx.HTTPError) -> str:
+    """Human-readable Binance failure; 451 is a common geo-restriction."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status == 451:
+        return (
+            f"Binance {interval} unavailable for {symbol} (HTTP 451 geo-restricted); "
+            "falling back to Coinbase/CoinGecko"
+        )
+    return f"Binance {interval} fetch failed for {symbol}: {exc}"
 
 
 def _update_state(

@@ -10,6 +10,20 @@ models:
         tests:
           - not_null
           - unique
+      - name: mvrv
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 100
+              row_condition: "mvrv is not null"
+              strictly: false
+      - name: nupl
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: -1
+              max_value: 1
+              row_condition: "nupl is not null"
+              strictly: false
 
   - name: fct_macro_series
     description: >
@@ -20,3 +34,168 @@ models:
         tests:
           - not_null
           - unique
+
+  - name: fct_wallet_flows_daily
+    description: Daily wallet transfer flows by chain and entity type.
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: chain
+        tests:
+          - not_null
+      - name: entity_type
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - chain
+            - entity_type
+
+  - name: fct_wallet_signals_daily
+    description: Aggregated wallet intelligence signals by date and chain.
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: chain
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - chain
+
+  - name: fct_wallet_cabal_events
+    description: Detected coordinated wallet inflow windows.
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: chain
+        tests:
+          - not_null
+      - name: mint
+        tests:
+          - not_null
+      - name: window_start
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - chain
+            - mint
+            - window_start
+
+  - name: fct_wallet_smart_money
+    description: Smart-money scoring per watched wallet address.
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: chain
+        tests:
+          - not_null
+      - name: address
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - chain
+            - address
+
+  - name: fct_btc_wallet_holdings_daily
+    description: Cumulative BTC holdings per watched address by date.
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: address
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - address
+
+  - name: fct_btc_wallet_counterparties
+    description: Daily BTC counterparty interaction graph.
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: address
+        tests:
+          - not_null
+      - name: counterparty
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - address
+            - counterparty
+
+  - name: fct_btc_insider_moves
+    description: Large BTC moves with identity enrichment.
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: tx_hash
+        tests:
+          - not_null
+      - name: address
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - tx_hash
+            - address
+            - direction
+
+  - name: fct_btc_insider_timing
+    description: Insider move timing scores vs BTC price momentum.
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: address
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - address
+
+  - name: fct_wallet_insider_clusters
+    description: Shared funder and co-move insider cluster events.
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: chain
+        tests:
+          - not_null
+      - name: identity_id
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - chain
+            - identity_id
+            - cluster_type

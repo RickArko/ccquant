@@ -218,7 +218,10 @@ dbt = [
     { name = "dbt-duckdb" },
 ]
 dev = [
+    { name = "ipykernel" },
+    { name = "jupyterlab" },
     { name = "mypy" },
+    { name = "plotly" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -242,7 +245,18 @@ wallet = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "ipykernel" },
+    { name = "jupyterlab" },
     { name = "kaleido" },
+    { name = "mypy" },
+    { name = "pandas" },
+    { name = "plotly" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "ruff" },
+    { name = "scikit-learn" },
+    { name = "statsmodels" },
 ]
 
 [package.metadata]
@@ -252,13 +266,16 @@ requires-dist = [
     { name = "duckdb", specifier = ">=1.2.2" },
     { name = "google-cloud-bigquery", marker = "extra == 'wallet'", specifier = ">=3.25.0" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "ipykernel", marker = "extra == 'dev'", specifier = ">=6.29.5" },
     { name = "ipykernel", marker = "extra == 'notebook'", specifier = ">=6.29.5" },
+    { name = "jupyterlab", marker = "extra == 'dev'", specifier = ">=4.3.0" },
     { name = "jupyterlab", marker = "extra == 'notebook'", specifier = ">=4.3.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.15.0" },
     { name = "numpy", specifier = ">=2.2.0" },
     { name = "numpy", marker = "extra == 'forecast'", specifier = ">=2.2.0" },
     { name = "numpy", marker = "extra == 'notebook'", specifier = ">=2.2.0" },
     { name = "pandas", marker = "extra == 'forecast'", specifier = ">=2.2.3" },
+    { name = "plotly", marker = "extra == 'dev'", specifier = ">=6.0.0" },
     { name = "plotly", marker = "extra == 'notebook'", specifier = ">=6.0.0" },
     { name = "polars", specifier = ">=1.30.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0.0" },
@@ -276,7 +293,20 @@ requires-dist = [
 provides-extras = ["dev", "forecast", "notebook", "dbt", "wallet"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "kaleido", specifier = ">=1.3.0" }]
+dev = [
+    { name = "ipykernel", specifier = ">=6.29.5" },
+    { name = "jupyterlab", specifier = ">=4.3.0" },
+    { name = "kaleido", specifier = ">=1.3.0" },
+    { name = "mypy", specifier = ">=1.15.0" },
+    { name = "pandas", specifier = ">=2.2.3" },
+    { name = "plotly", specifier = ">=6.0.0" },
+    { name = "pre-commit", specifier = ">=4.0.0" },
+    { name = "pytest", specifier = ">=8.3.5" },
+    { name = "pytest-asyncio", specifier = ">=0.25.0" },
+    { name = "ruff", specifier = ">=0.12.12" },
+    { name = "scikit-learn", specifier = ">=1.6.0" },
+    { name = "statsmodels", specifier = ">=0.14.4" },
+]
 
 [[package]]
 name = "certifi"

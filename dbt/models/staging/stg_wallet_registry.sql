@@ -1,5 +1,5 @@
 select
-  address,
+  {{ normalize_wallet_address('address', 'chain') }} as address,
   chain,
   label,
   entity_type,

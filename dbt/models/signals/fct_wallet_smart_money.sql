@@ -1,7 +1,8 @@
 {{
     config(
         materialized='table',
-        schema='signals'
+        schema='signals',
+        tags=['wallet']
     )
 }}
 

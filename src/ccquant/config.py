@@ -6,6 +6,26 @@ from pathlib import Path
 from typing import Any
 
 import yaml  # type: ignore[import-untyped]
+from dotenv import load_dotenv
+
+
+def load_project_dotenv(start: Path | None = None) -> Path | None:
+    """Load the nearest project ``.env`` with python-dotenv.
+
+    Uses ``override=True`` so ``.env`` values win over VS Code / Cursor notebook
+    env injection (those loaders often keep trailing ``# comments`` on secrets,
+    which breaks FRED/CoinGecko). python-dotenv strips inline comments itself.
+    """
+    root = (start or Path.cwd()).resolve()
+    for candidate in [root, *root.parents]:
+        env_path = candidate / ".env"
+        if env_path.is_file():
+            load_dotenv(env_path, override=True)
+            return env_path
+        if (candidate / "pyproject.toml").is_file():
+            # Stop at repo root even if `.env` is missing
+            break
+    return None
 
 
 @dataclass(frozen=True)
@@ -62,6 +82,7 @@ class UniverseConfig:
 @dataclass(frozen=True)
 class WalletHistoryConfig:
     solana_source: str = "solarchive"
+    bitcoin_source: str = "bigquery"
     extract_days: int = 7
 
 
@@ -72,6 +93,7 @@ class WalletTailConfig:
     max_wallets: int = 50
     request_delay_seconds: float = 1.0
     solana_rpc_url: str = "https://api.mainnet-beta.solana.com"
+    bitcoin_api_url: str = "https://mempool.space/api"
 
 
 @dataclass(frozen=True)
@@ -89,6 +111,14 @@ class WalletTrackingConfig:
     )
     seed_file: Path = field(
         default_factory=lambda: Path("config/seeds/wallet_registry_seed.csv")
+    )
+    identities_seed_file: Path = field(
+        default_factory=lambda: Path("config/seeds/wallet_identities_seed.csv")
+    )
+    identity_links_seed_file: Path = field(
+        default_factory=lambda: Path(
+            "config/seeds/wallet_identity_links_seed.csv"
+        )
     )
     history: WalletHistoryConfig = field(default_factory=WalletHistoryConfig)
     tail: WalletTailConfig = field(default_factory=WalletTailConfig)
@@ -179,6 +209,7 @@ class AppConfig:
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:
+    load_project_dotenv()
     data: dict[str, Any] = {}
     if path is not None:
         with Path(path).open("r", encoding="utf-8") as handle:
@@ -248,7 +279,9 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             enabled=bool(wallet_data.get("enabled", True)),
             chains=[
                 str(chain).lower()
-                for chain in wallet_data.get("chains", ["solana", "arbitrum"])
+                for chain in wallet_data.get(
+                    "chains", ["solana", "arbitrum"]
+                )
             ],
             seed_file=Path(
                 str(
@@ -257,9 +290,28 @@ def load_config(path: str | Path | None = None) -> AppConfig:
                     )
                 )
             ),
+            identities_seed_file=Path(
+                str(
+                    wallet_data.get(
+                        "identities_seed_file",
+                        "config/seeds/wallet_identities_seed.csv",
+                    )
+                )
+            ),
+            identity_links_seed_file=Path(
+                str(
+                    wallet_data.get(
+                        "identity_links_seed_file",
+                        "config/seeds/wallet_identity_links_seed.csv",
+                    )
+                )
+            ),
             history=WalletHistoryConfig(
                 solana_source=str(
                     history_data.get("solana_source", "solarchive")
+                ),
+                bitcoin_source=str(
+                    history_data.get("bitcoin_source", "bigquery")
                 ),
                 extract_days=int(history_data.get("extract_days", 7)),
             ),
@@ -274,6 +326,12 @@ def load_config(path: str | Path | None = None) -> AppConfig:
                     tail_data.get(
                         "solana_rpc_url",
                         "https://api.mainnet-beta.solana.com",
+                    )
+                ),
+                bitcoin_api_url=str(
+                    tail_data.get(
+                        "bitcoin_api_url",
+                        "https://mempool.space/api",
                     )
                 ),
             ),

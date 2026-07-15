@@ -4,7 +4,11 @@ import csv
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ccquant.models import WalletRegistryEntry
+from ccquant.models import (
+    WalletIdentity,
+    WalletIdentityLink,
+    WalletRegistryEntry,
+)
 
 
 def load_seed_registry(path: Path) -> list[WalletRegistryEntry]:
@@ -31,10 +35,81 @@ def load_seed_registry(path: Path) -> list[WalletRegistryEntry]:
     return entries
 
 
+def load_seed_identities(path: Path) -> list[WalletIdentity]:
+    if not path.exists():
+        return []
+    identities: list[WalletIdentity] = []
+    with path.open("r", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            identities.append(
+                WalletIdentity(
+                    identity_id=row["identity_id"].strip(),
+                    display_name=row["display_name"].strip(),
+                    category=row["category"].strip().lower(),
+                    description=row.get("description", "").strip(),
+                    source_url=row.get("source_url", "").strip(),
+                    active=str(row.get("active", "true")).strip().lower()
+                    != "false",
+                )
+            )
+    return identities
+
+
+def _parse_linked_at(value: str | None) -> datetime:
+    if value is None or not value.strip():
+        return datetime.now(tz=UTC)
+    raw = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(raw)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    except ValueError as exc:
+        raise ValueError(f"invalid linked_at: {value!r}") from exc
+
+
+def load_seed_identity_links(path: Path) -> list[WalletIdentityLink]:
+    if not path.exists():
+        return []
+    links: list[WalletIdentityLink] = []
+    with path.open("r", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            links.append(
+                WalletIdentityLink(
+                    address=row["address"].strip(),
+                    chain=row["chain"].strip().lower(),
+                    identity_id=row["identity_id"].strip(),
+                    link_type=row.get("link_type", "associated").strip().lower(),
+                    confidence=float(row.get("confidence") or 0.5),
+                    source=row.get("source", "manual").strip().lower(),
+                    linked_at=_parse_linked_at(row.get("linked_at")),
+                )
+            )
+    return links
+
+
 def resolve_seed_path(configured: Path) -> Path:
     if configured.exists():
         return configured
     fallback = Path("data/seeds/wallet_registry_seed.csv")
+    if fallback.exists():
+        return fallback
+    return configured
+
+
+def resolve_identity_seed_path(configured: Path) -> Path:
+    if configured.exists():
+        return configured
+    fallback = Path("data/seeds/wallet_identities_seed.csv")
+    if fallback.exists():
+        return fallback
+    return configured
+
+
+def resolve_identity_links_seed_path(configured: Path) -> Path:
+    if configured.exists():
+        return configured
+    fallback = Path("data/seeds/wallet_identity_links_seed.csv")
     if fallback.exists():
         return fallback
     return configured

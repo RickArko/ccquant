@@ -9,9 +9,9 @@ limits, and key setup instructions are in [`documentation/API_Pricing.md`](docum
 ## Commands
 
 ```bash
-uv sync --extra dev                       # lint/test tooling (mypy, pytest, ruff, pre-commit)
-uv sync --extra dev --extra notebook --extra forecast  # + Jupyter/plotly + modeling libs for notebooks
-uv sync --extra dev --extra notebook --extra forecast --extra dbt  # + dbt transforms
+uv sync --extra dev                       # optional alias; plain `uv sync` already installs lint/test + notebooks via dependency-groups.dev
+uv sync --extra forecast                  # optional; forecast libs also in dependency-groups.dev
+uv sync --extra dbt                       # + dbt transforms
 uv run pre-commit install                 # install git hook (run once after clone)
 uv run pre-commit run --all-files         # run all hooks manually
 uv run pytest                             # all tests
@@ -23,14 +23,14 @@ uv run mypy src                           # typecheck — strict mode, MUST run 
 `pre-commit` runs `ruff check --fix` -> `mypy src` -> `pytest -q` on every commit
 (hooks use `uv run` to reuse the project venv). Bypass with `git commit --no-verify`.
 
-Verify in order: `ruff check .` -> `mypy src` -> `pytest` -> `dbt build && dbt test` (dbt requires `--extra dbt`).
+Verify in order: `ruff check .` -> `mypy src` -> `pytest` -> `dbt build && dbt test` (dbt requires `--extra dbt`). Optional project lint: `dbt build --select package:dbt_project_evaluator --project-dir dbt --profiles-dir dbt`. Conventions: [`documentation/dbt_conventions.md`](documentation/dbt_conventions.md).
 
 CLI entry point is `ccquant` (`ccquant.cli:main`), a Typer app with subcommands:
 
 ```bash
 uv run ccquant sync all                    # one-command update: universe + daily + hourly + status
 uv run ccquant sync universe [--size N] [--config FILE]   # fetch top-cap universe + probe exchange pairs
-uv run ccquant sync backfill --interval {1d|1h} [--top N] [--full|--tail] [--config FILE]
+uv run ccquant sync backfill --interval {1d|1h} [--top N] [--full|--tail] [--force] [--config FILE]
 uv run ccquant sync oi [--interval {1d|1h}] [--top N] [--full|--tail]   # open interest (Binance+Bybit+OKX)
 uv run ccquant sync macro                  # FRED macro series
 uv run ccquant sync wallets --no-tail    # wallet registry only (start here; no RPC)
@@ -38,7 +38,9 @@ uv run ccquant sync wallets --full       # force historical extract
 uv run ccquant sync wallets              # + RPC tail (needs dedicated solana_rpc_url)
 uv run ccquant migrate onchain [--source FILE]  # migrate onchain.duckdb into main DB
 uv run ccquant wallet discover --chain solana --top 20
+uv run ccquant wallet discover --chain bitcoin --top 20
 uv run ccquant wallet import-extract --source solarchive --date YYYY-MM-DD
+uv run ccquant wallet import-extract --source bigquery --chain bitcoin
 uv run ccquant wallet resolve-sns mitch.sol
 uv run ccquant wallet alerts --since 1
 uv run ccquant db backup [--dest DIR] [--keep N]  # timestamped file-copy backup
@@ -56,6 +58,8 @@ uv run dbt seed --project-dir dbt --profiles-dir dbt          # load seeds/event
 uv run dbt build --project-dir dbt --profiles-dir dbt         # build all models + run all tests
 uv run dbt test --project-dir dbt --profiles-dir dbt          # run tests only
 uv run dbt snapshot --project-dir dbt --profiles-dir dbt      # run SCD2 snapshots
+uv run dbt build --select package:dbt_project_evaluator --project-dir dbt --profiles-dir dbt  # lint project structure
+uv run python -m tests.fixtures.seed_dbt_fixture             # seed CI fixture data locally
 ```
 
 `sync all` is the fastest way to bring the DB up to today — it runs universe
@@ -74,7 +78,10 @@ dbt step (e.g. when dbt isn't installed). Use `--no-wallets` to skip wallet sync
 - `sync backfill` auto-runs `sync universe` when no active assets exist yet.
 - `backfill --full` (default) only does a full historical pull when
   `sync_state.backfill_complete` is false; once complete it falls back to tail-refresh.
-  Use `--tail` to force a short refresh.
+  Use `--tail` to force a short refresh. Use `--force` with `--full` to ignore
+  `backfill_complete` and re-pull full history (needed if an earlier incomplete
+  sync was marked complete, or after Binance geo-blocks left a short series via
+  Coinbase tail-only refreshes).
 
 ## Architecture
 
@@ -89,7 +96,8 @@ dbt step (e.g. when dbt isn't installed). Use `--no-wallets` to skip wallet sync
   `onchain_series`, `onchain_sync_state`, `open_interest`, `macro_series`,
   `macro_sync_state`, `wallet_registry`, `wallet_transfers`,
   `wallet_positions_daily`, `wallet_sync_state`, `wallet_signals_daily`,
-  `wallet_alerts`. Schema is created idempotently on `MarketStore` init.
+  `wallet_alerts`, `wallet_identities`, `wallet_identity_links`. Schema is
+  created idempotently on `MarketStore` init.
   `sync_state.earliest_at`/`latest_at` are stored as ISO varchar.
 - dbt transformation layer lives in `dbt/`. Python owns `main` schema (raw);
   dbt owns `main_staging` (views), `main_marts` (tables), `main_signals`
@@ -100,9 +108,10 @@ dbt step (e.g. when dbt isn't installed). Use `--no-wallets` to skip wallet sync
 - Open interest has per-exchange config toggles (`open_interest.binance/bybit/okx`).
   Disable any exchange in config without breaking the aggregate mart.
 - Optional extras: `uv sync --extra forecast` (numpy/pandas/scikit-learn/statsmodels) and
-  `--extra notebook` (jupyterlab/plotly). `forecasting.py` itself uses only core deps
-  (duckdb, polars) and is always importable; the heavier modeling libs are for future
-  model layers.
+  `--extra notebook` (jupyterlab/plotly/ipykernel; also included in default
+  `dependency-groups.dev` / `--extra dev`). `forecasting.py` itself uses only core deps
+  (duckdb, polars) and is always importable; the heavier modeling libs are for notebooks
+  and future model layers (installed by default via `uv sync`).
 
 ## Coding Style
 

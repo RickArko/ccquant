@@ -54,6 +54,10 @@ sources:
         description: >
           Per-symbol sync metadata tracking backfill progress.
           Grain: symbol x interval.
+        freshness:
+          warn_after: {count: 36, period: hour}
+          error_after: {count: 72, period: hour}
+        loaded_at_field: last_refresh_at
         columns:
           - name: symbol
           - name: interval
@@ -105,6 +109,10 @@ sources:
       - name: macro_sync_state
         description: >
           Per-series sync metadata for macro data. Grain: series_id x source.
+        freshness:
+          warn_after: {count: 36, period: hour}
+          error_after: {count: 72, period: hour}
+        loaded_at_field: last_refresh_at
         columns:
           - name: series_id
           - name: source
@@ -221,3 +229,24 @@ sources:
           - name: action
           - name: severity
           - name: block_time
+
+      - name: wallet_identities
+        description: >
+          Insider and institutional identity catalog.
+          Grain: identity_id.
+        columns:
+          - name: identity_id
+          - name: display_name
+          - name: category
+          - name: active
+
+      - name: wallet_identity_links
+        description: >
+          Links between on-chain addresses and identities.
+          Grain: address x chain x identity_id.
+        columns:
+          - name: address
+          - name: chain
+          - name: identity_id
+          - name: link_type
+          - name: confidence

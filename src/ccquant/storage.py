@@ -21,6 +21,8 @@ from ccquant.models import (
     TweetSyncState,
     TwitterAccount,
     WalletAlert,
+    WalletIdentity,
+    WalletIdentityLink,
     WalletPositionDaily,
     WalletRegistryEntry,
     WalletSignalDaily,
@@ -254,6 +256,33 @@ class MarketStore:
               alerted_at timestamp not null,
               metadata_json varchar not null default '{}',
               primary key (address, chain, tx_hash, action)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists wallet_identities (
+              identity_id varchar not null,
+              display_name varchar not null,
+              category varchar not null,
+              description varchar not null default '',
+              source_url varchar not null default '',
+              active boolean not null default true,
+              primary key (identity_id)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists wallet_identity_links (
+              address varchar not null,
+              chain varchar not null,
+              identity_id varchar not null,
+              link_type varchar not null,
+              confidence double not null,
+              source varchar not null,
+              linked_at timestamp not null,
+              primary key (address, chain, identity_id)
             )
             """
         )
@@ -693,6 +722,60 @@ class MarketStore:
             )
         return len(entries)
 
+    def upsert_wallet_identities(self, identities: list[WalletIdentity]) -> int:
+        for identity in identities:
+            self._conn.execute(
+                """
+                insert into wallet_identities (
+                  identity_id, display_name, category, description,
+                  source_url, active
+                ) values (?, ?, ?, ?, ?, ?)
+                on conflict (identity_id) do update set
+                  display_name = excluded.display_name,
+                  category = excluded.category,
+                  description = excluded.description,
+                  source_url = excluded.source_url,
+                  active = excluded.active
+                """,
+                [
+                    identity.identity_id,
+                    identity.display_name,
+                    identity.category,
+                    identity.description,
+                    identity.source_url,
+                    identity.active,
+                ],
+            )
+        return len(identities)
+
+    def upsert_wallet_identity_links(
+        self,
+        links: list[WalletIdentityLink],
+    ) -> int:
+        for link in links:
+            self._conn.execute(
+                """
+                insert into wallet_identity_links (
+                  address, chain, identity_id, link_type, confidence,
+                  source, linked_at
+                ) values (?, ?, ?, ?, ?, ?, ?)
+                on conflict (address, chain, identity_id) do update set
+                  link_type = excluded.link_type,
+                  confidence = excluded.confidence,
+                  source = excluded.source
+                """,
+                [
+                    link.address,
+                    link.chain.lower(),
+                    link.identity_id,
+                    link.link_type,
+                    link.confidence,
+                    link.source,
+                    link.linked_at,
+                ],
+            )
+        return len(links)
+
     def active_wallet_registry(self) -> list[WalletRegistryEntry]:
         rows = self._conn.execute(
             """
@@ -916,6 +999,8 @@ class MarketStore:
             "wallet_sync_state",
             "wallet_signals_daily",
             "wallet_alerts",
+            "wallet_identities",
+            "wallet_identity_links",
         ]:
             row = self._conn.execute(f"select count(*) from {table}").fetchone()
             counts[table] = int(row[0]) if row else 0

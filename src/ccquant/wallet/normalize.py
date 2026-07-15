@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -8,6 +9,8 @@ from ccquant.models import WalletTransfer
 
 SOL_MINT = "So11111111111111111111111111111111111111112"
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+BTC_ASSET = "btc"
+SATOSHI = 100_000_000
 
 
 def watched_address(transfer: WalletTransfer) -> str:
@@ -170,6 +173,234 @@ def transfers_from_arbitrum_tx(
     return transfers
 
 
+def transfers_from_bitcoin_tx(
+    tx: dict[str, Any],
+    *,
+    watched: set[str],
+    source: str,
+) -> list[WalletTransfer]:
+    """Normalize a Bitcoin transaction into UTXO transfer rows."""
+    tx_hash = str(tx.get("hash") or tx.get("txid") or tx.get("tx_hash") or "")
+    block_time = _parse_block_time(
+        tx.get("block_time")
+        or tx.get("block_timestamp")
+        or (tx.get("status") or {}).get("block_time")
+    )
+    watched_norm = {_normalize_btc_address(addr) for addr in watched}
+    all_input_addresses: list[str] = []
+    all_output_addresses: list[str] = []
+    transfers: list[WalletTransfer] = []
+
+    outputs = tx.get("outputs") or tx.get("vout") or []
+    if isinstance(outputs, list):
+        for output in outputs:
+            if not isinstance(output, dict):
+                continue
+            for address in _btc_output_addresses(output):
+                norm = _normalize_btc_address(address)
+                if norm:
+                    all_output_addresses.append(norm)
+
+    inputs = tx.get("inputs") or tx.get("vin") or []
+    if isinstance(inputs, list):
+        for inp in inputs:
+            if not isinstance(inp, dict) or inp.get("is_coinbase"):
+                continue
+            for address in _btc_input_addresses(inp):
+                norm = _normalize_btc_address(address)
+                if norm:
+                    all_input_addresses.append(norm)
+
+    if isinstance(outputs, list):
+        for offset, output in enumerate(outputs):
+            if not isinstance(output, dict):
+                continue
+            value_sats = _parse_satoshi(
+                output.get("value")
+                or (output.get("prevout") or {}).get("value")
+            )
+            script_type = str(
+                output.get("type")
+                or output.get("scriptpubkey_type")
+                or "output"
+            )
+            leg_index = _btc_leg_index(output, offset)
+            addresses = _btc_output_addresses(output)
+            for address in addresses:
+                norm = _normalize_btc_address(address)
+                if norm not in watched_norm:
+                    continue
+                transfers.append(
+                    WalletTransfer(
+                        chain="bitcoin",
+                        tx_hash=tx_hash,
+                        transfer_index=leg_index,
+                        block_time=block_time,
+                        from_address=_first_btc_counterparty(
+                            all_input_addresses,
+                            watched_norm,
+                            exclude=norm,
+                        ),
+                        to_address=norm,
+                        asset_mint_or_contract=BTC_ASSET,
+                        asset_symbol="BTC",
+                        amount=value_sats / SATOSHI,
+                        amount_usd=None,
+                        direction="inflow",
+                        program_or_method=script_type,
+                        source=source,
+                    )
+                )
+
+    if isinstance(inputs, list):
+        for offset, inp in enumerate(inputs):
+            if not isinstance(inp, dict):
+                continue
+            if inp.get("is_coinbase"):
+                continue
+            value_sats = _parse_satoshi(
+                inp.get("value")
+                or (inp.get("prevout") or {}).get("value")
+            )
+            script_type = str(
+                inp.get("type")
+                or (inp.get("prevout") or {}).get("scriptpubkey_type")
+                or "input"
+            )
+            leg_index = _btc_leg_index(inp, offset)
+            addresses = _btc_input_addresses(inp)
+            for address in addresses:
+                norm = _normalize_btc_address(address)
+                if norm not in watched_norm:
+                    continue
+                transfers.append(
+                    WalletTransfer(
+                        chain="bitcoin",
+                        tx_hash=tx_hash,
+                        transfer_index=leg_index,
+                        block_time=block_time,
+                        from_address=norm,
+                        to_address=_first_btc_counterparty(
+                            all_output_addresses,
+                            watched_norm,
+                            exclude=norm,
+                        ),
+                        asset_mint_or_contract=BTC_ASSET,
+                        asset_symbol="BTC",
+                        amount=value_sats / SATOSHI,
+                        amount_usd=None,
+                        direction="outflow",
+                        program_or_method=script_type,
+                        source=source,
+                    )
+                )
+
+    return transfers
+
+
+def _normalize_btc_address(address: str) -> str:
+    return address.strip()
+
+
+def _btc_leg_index(leg: dict[str, Any], offset: int) -> int:
+    """Deterministic UTXO leg index matching BigQuery output/input.index."""
+    for key in ("index", "n"):
+        raw = leg.get(key)
+        if raw is None or raw == "":
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return offset
+
+
+def _first_btc_counterparty(
+    candidates: list[str],
+    watched: set[str],
+    *,
+    exclude: str,
+) -> str:
+    for addr in candidates:
+        if addr and addr != exclude and addr not in watched:
+            return addr
+    for addr in candidates:
+        if addr and addr != exclude:
+            return addr
+    return ""
+
+
+def _btc_output_addresses(output: dict[str, Any]) -> list[str]:
+    addresses = output.get("addresses")
+    if isinstance(addresses, list) and addresses:
+        return [str(addr) for addr in addresses if addr]
+    single = output.get("scriptpubkey_address") or output.get("address")
+    return [str(single)] if single else []
+
+
+def _btc_input_addresses(inp: dict[str, Any]) -> list[str]:
+    addresses = inp.get("addresses")
+    if isinstance(addresses, list) and addresses:
+        return [str(addr) for addr in addresses if addr]
+    prevout = inp.get("prevout") or {}
+    if isinstance(prevout, dict):
+        single = prevout.get("scriptpubkey_address") or prevout.get("address")
+        if single:
+            return [str(single)]
+    return []
+
+
+def _parse_satoshi(value: Any) -> int:
+    if value is None or value == "":
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    try:
+        return int(Decimal(str(value)))
+    except (InvalidOperation, ValueError):
+        return 0
+
+
+def transfer_from_bitcoin_bq_row(
+    row: dict[str, Any],
+    *,
+    source: str,
+) -> WalletTransfer | None:
+    address = str(row.get("address") or "")
+    if not address:
+        return None
+    direction = str(row.get("direction") or "inflow")
+    counterparty = str(row.get("counterparty") or "")
+    block_time = _parse_block_time(row.get("block_time"))
+    value_sats = _parse_satoshi(row.get("value_sats"))
+    leg_index = int(row.get("leg_index") or 0)
+    script_type = str(row.get("script_type") or "unknown")
+    tx_hash = str(row.get("hash") or "")
+    if direction == "outflow":
+        from_address = address
+        to_address = counterparty
+    else:
+        from_address = counterparty
+        to_address = address
+    return WalletTransfer(
+        chain="bitcoin",
+        tx_hash=tx_hash,
+        transfer_index=leg_index,
+        block_time=block_time,
+        from_address=from_address,
+        to_address=to_address,
+        asset_mint_or_contract=BTC_ASSET,
+        asset_symbol="BTC",
+        amount=value_sats / SATOSHI,
+        amount_usd=None,
+        direction=direction,
+        program_or_method=script_type,
+        source=source,
+    )
+
+
 def transfers_from_solarchive_row(
     row: dict[str, Any],
     *,
@@ -180,9 +411,9 @@ def transfers_from_solarchive_row(
     block_time = _parse_block_time(
         row.get("block_time") or row.get("block_timestamp")
     )
-    account_keys = row.get("account_keys") or row.get("accounts") or []
-    if isinstance(account_keys, str):
-        account_keys = [account_keys]
+    account_keys = coerce_account_key_list(row.get("account_keys"))
+    if not account_keys:
+        account_keys = coerce_account_key_list(row.get("accounts"))
     keys = [str(k) for k in account_keys]
     matched = [k for k in keys if k in watched]
     if not matched:
@@ -205,6 +436,40 @@ def transfers_from_solarchive_row(
             source="solarchive",
         )
     ]
+
+
+def coerce_account_key_list(value: Any) -> list[Any]:
+    """Normalize parquet/pandas account key cells (lists, ndarrays, JSON strings).
+
+    SolArchive ``accounts`` is typically LIST<STRUCT(pubkey:=..., ...)> which
+    becomes a list of dicts with a ``pubkey`` field after ``fetchdf()``.
+    """
+    if value is None:
+        return []
+    # Avoid ``x or y`` — numpy arrays raise on truthiness
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        value = tolist()
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                return [text]
+            return coerce_account_key_list(parsed)
+        return [text] if text else []
+    if isinstance(value, (list, tuple)):
+        out: list[Any] = []
+        for item in value:
+            if isinstance(item, dict):
+                pubkey = item.get("pubkey") or item.get("Pubkey")
+                if pubkey is not None:
+                    out.append(pubkey)
+            else:
+                out.append(item)
+        return out
+    return [value]
 
 
 def _account_keys(tx: dict[str, Any]) -> list[str]:

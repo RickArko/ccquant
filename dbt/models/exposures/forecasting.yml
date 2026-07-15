@@ -1,0 +1,40 @@
+version: 2
+
+exposures:
+  - name: forecasting_daily_panel
+    label: Forecasting daily OHLCV panel
+    type: application
+    maturity: high
+    description: >
+      Python forecasting module reads deduplicated daily OHLCV from the marts
+      layer when available.
+    depends_on:
+      - ref('fct_ohlcv_daily')
+    owner:
+      name: ccquant
+      email: dev@localhost
+
+  - name: forecasting_signals_panel
+    label: Forecasting signals panel
+    type: application
+    maturity: high
+    description: >
+      Canonical daily analytics panel consumed by load_signals_panel() in
+      src/ccquant/forecasting.py.
+    depends_on:
+      - ref('mart_signals_daily')
+    owner:
+      name: ccquant
+      email: dev@localhost
+
+  - name: forecasting_tweet_panel
+    label: Forecasting tweet panel
+    type: application
+    maturity: medium
+    description: >
+      Tweet mention signals consumed by load_tweet_panel() when the mart exists.
+    depends_on:
+      - ref('fct_tweet_mentions_daily')
+    owner:
+      name: ccquant
+      email: dev@localhost

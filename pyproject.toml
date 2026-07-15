@@ -20,12 +20,18 @@ dependencies = [
 ccquant = "ccquant.cli:main"
 
 [project.optional-dependencies]
+# Default local/dev install: lint/test + notebook kernel (ipykernel) + charting.
+# Prefer `uv sync` (installs dependency-groups.dev) or `uv sync --extra dev`.
 dev = [
   "mypy>=1.15.0",
   "pre-commit>=4.0.0",
   "pytest>=8.3.5",
   "pytest-asyncio>=0.25.0",
   "ruff>=0.12.12",
+  # Notebooks / VS Code · Cursor kernels (also in dependency-groups.dev)
+  "ipykernel>=6.29.5",
+  "jupyterlab>=4.3.0",
+  "plotly>=6.0.0",
 ]
 forecast = [
   "numpy>=2.2.0",
@@ -33,6 +39,7 @@ forecast = [
   "scikit-learn>=1.6.0",
   "statsmodels>=0.14.4",
 ]
+# Back-compat alias — same notebook packages as `dev` (ipykernel/plotly/jupyterlab)
 notebook = [
   "ipykernel>=6.29.5",
   "jupyterlab>=4.3.0",
@@ -77,8 +84,27 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 warn_return_any = true
 
+[[tool.mypy.overrides]]
+module = ["google.*", "google.cloud.*", "google.cloud.bigquery.*"]
+ignore_missing_imports = true
+
+# Installed by default on `uv sync` (omit with `uv sync --no-dev`).
+# Lint/test + notebooks + forecast libs so pre-commit hooks and VS Code kernels work.
 [dependency-groups]
 dev = [
-    "kaleido>=1.3.0",
+  # Lint / test (pre-commit hooks: ruff, mypy, pytest)
+  "mypy>=1.15.0",
+  "pre-commit>=4.0.0",
+  "pytest>=8.3.5",
+  "pytest-asyncio>=0.25.0",
+  "ruff>=0.12.12",
+  # Notebooks / VS Code · Cursor kernels
+  "ipykernel>=6.29.5",
+  "jupyterlab>=4.3.0",
+  "plotly>=6.0.0",
+  "kaleido>=1.3.0",
+  # Research notebooks (Eth/BTC/Macro) need these at import time
+  "pandas>=2.2.3",
+  "scikit-learn>=1.6.0",
+  "statsmodels>=0.14.4",
 ]
-
