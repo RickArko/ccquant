@@ -39,6 +39,8 @@ Selective builds by domain:
 uv run dbt build --select tag:market+ --project-dir dbt --profiles-dir dbt
 uv run dbt build --select tag:wallet+ --project-dir dbt --profiles-dir dbt
 uv run dbt build --select tag:social+ --project-dir dbt --profiles-dir dbt
+uv run dbt build --select tag:ops+ --project-dir dbt --profiles-dir dbt
+uv run dbt snapshot --project-dir dbt --profiles-dir dbt   # SCD2 snap_assets before build if needed
 ```
 
 ## Verify order

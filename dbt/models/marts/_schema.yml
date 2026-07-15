@@ -39,6 +39,31 @@ models:
             - symbol
             - date
 
+  - name: fct_ohlcv_hourly
+    description: >
+      Hourly OHLCV with source deduplication by priority (binance > coinbase).
+      One row per symbol x hour.
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+      - name: hour
+        tests:
+          - not_null
+      - name: close
+        tests:
+          - not_null
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['binance', 'coinbase']
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - symbol
+            - hour
+
   - name: fct_open_interest
     description: >
       Per-exchange open interest normalized to USD notional. For exchanges
@@ -174,3 +199,72 @@ models:
           combination_of_columns:
             - symbol
             - date
+
+  - name: mart_ops_freshness
+    description: >
+      Unified sync-cursor mart for ops / data-quality monitoring across
+      ohlcv, macro, onchain, wallet, and twitter domains. Not part of
+      mart_signals_daily.
+    columns:
+      - name: domain
+        tests:
+          - not_null
+      - name: entity_key
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - domain
+            - entity_key
+
+  - name: fct_wallet_alerts
+    description: Thin mart of wallet alert events for ops monitoring.
+    columns:
+      - name: address
+        tests:
+          - not_null
+      - name: chain
+        tests:
+          - not_null
+      - name: tx_hash
+        tests:
+          - not_null
+      - name: action
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - address
+            - chain
+            - tx_hash
+            - action
+
+  - name: fct_tweet_alerts
+    description: Thin mart of tweet alert events for ops monitoring.
+    columns:
+      - name: tweet_id
+        tests:
+          - not_null
+      - name: alert_type
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - tweet_id
+            - alert_type
+
+  - name: dim_assets_history
+    description: >
+      SCD2 history of the active research universe from snap_assets.
+      Includes dbt snapshot validity columns.
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+      - name: dbt_scd_id
+        tests:
+          - not_null
+          - unique

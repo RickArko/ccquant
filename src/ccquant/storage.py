@@ -25,7 +25,6 @@ from ccquant.models import (
     WalletIdentityLink,
     WalletPositionDaily,
     WalletRegistryEntry,
-    WalletSignalDaily,
     WalletSyncState,
     WalletTransfer,
 )
@@ -229,6 +228,8 @@ class MarketStore:
             )
             """
         )
+        # Legacy unused table: dbt fct_wallet_signals_daily is authoritative.
+        # Kept for idempotent opens of older DuckDB files.
         self._conn.execute(
             """
             create table if not exists wallet_signals_daily (
@@ -917,38 +918,6 @@ class MarketStore:
         ).fetchall()
         return [self._row_to_wallet_sync_state(row) for row in rows]
 
-    def upsert_wallet_signals_daily(
-        self,
-        signals: list[WalletSignalDaily],
-    ) -> int:
-        for signal in signals:
-            self._conn.execute(
-                """
-                insert into wallet_signals_daily (
-                  date, chain, smart_money_netflow_usd, kol_buy_count,
-                  deployer_activity_count, cabal_alert_count,
-                  top_wallet_accumulation_score
-                ) values (?, ?, ?, ?, ?, ?, ?)
-                on conflict (date, chain) do update set
-                  smart_money_netflow_usd = excluded.smart_money_netflow_usd,
-                  kol_buy_count = excluded.kol_buy_count,
-                  deployer_activity_count = excluded.deployer_activity_count,
-                  cabal_alert_count = excluded.cabal_alert_count,
-                  top_wallet_accumulation_score =
-                    excluded.top_wallet_accumulation_score
-                """,
-                [
-                    signal.date,
-                    signal.chain,
-                    signal.smart_money_netflow_usd,
-                    signal.kol_buy_count,
-                    signal.deployer_activity_count,
-                    signal.cabal_alert_count,
-                    signal.top_wallet_accumulation_score,
-                ],
-            )
-        return len(signals)
-
     def upsert_wallet_alerts(self, alerts: list[WalletAlert]) -> int:
         for alert in alerts:
             self._conn.execute(
@@ -997,7 +966,6 @@ class MarketStore:
             "wallet_transfers",
             "wallet_positions_daily",
             "wallet_sync_state",
-            "wallet_signals_daily",
             "wallet_alerts",
             "wallet_identities",
             "wallet_identity_links",

@@ -16,6 +16,21 @@ models:
             - symbol
             - date
 
+  - name: int_ohlcv_hourly_deduped
+    description: Source-priority deduplicated hourly OHLCV (binance > coinbase).
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+      - name: hour
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - symbol
+            - hour
+
   - name: int_oi_usd_normalized
     description: Open interest normalized to USD notional using daily close prices.
     columns:

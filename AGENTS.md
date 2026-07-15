@@ -23,7 +23,7 @@ uv run mypy src                           # typecheck — strict mode, MUST run 
 `pre-commit` runs `ruff check --fix` -> `mypy src` -> `pytest -q` on every commit
 (hooks use `uv run` to reuse the project venv). Bypass with `git commit --no-verify`.
 
-Verify in order: `ruff check .` -> `mypy src` -> `pytest` -> `dbt build && dbt test` (dbt requires `--extra dbt`). Optional project lint: `dbt build --select package:dbt_project_evaluator --project-dir dbt --profiles-dir dbt`. Conventions: [`documentation/dbt_conventions.md`](documentation/dbt_conventions.md).
+Verify in order: `ruff check .` -> `mypy src` -> `pytest` -> `dbt snapshot` -> `dbt build && dbt test` (dbt requires `--extra dbt`). Optional project lint: `dbt build --select package:dbt_project_evaluator --project-dir dbt --profiles-dir dbt`. Conventions: [`documentation/dbt_conventions.md`](documentation/dbt_conventions.md).
 
 CLI entry point is `ccquant` (`ccquant.cli:main`), a Typer app with subcommands:
 
@@ -64,7 +64,8 @@ uv run python -m tests.fixtures.seed_dbt_fixture             # seed CI fixture d
 
 `sync all` is the fastest way to bring the DB up to today — it runs universe
 refresh, then tail-refreshes daily and hourly (only fetching recent candles,
-not re-pulling full history), then OI + macro + wallets, then `dbt build` to rebuild
+not re-pulling full history), then OI + macro + wallets, then `dbt snapshot`
+(SCD2 `snap_assets` → `dim_assets_history`) and `dbt build` to rebuild
 marts/signals/events. Use it for routine updates. Use `--no-dbt` to skip the
 dbt step (e.g. when dbt isn't installed). Use `--no-wallets` to skip wallet sync.
 
@@ -95,9 +96,10 @@ dbt step (e.g. when dbt isn't installed). Use `--no-wallets` to skip wallet sync
 - DuckDB tables: `assets`, `ohlcv_daily`, `ohlcv_hourly`, `sync_state`,
   `onchain_series`, `onchain_sync_state`, `open_interest`, `macro_series`,
   `macro_sync_state`, `wallet_registry`, `wallet_transfers`,
-  `wallet_positions_daily`, `wallet_sync_state`, `wallet_signals_daily`,
-  `wallet_alerts`, `wallet_identities`, `wallet_identity_links`. Schema is
-  created idempotently on `MarketStore` init.
+  `wallet_positions_daily`, `wallet_sync_state`, `wallet_alerts`,
+  `wallet_identities`, `wallet_identity_links`. Schema is
+  created idempotently on `MarketStore` init. Wallet flow analytics use dbt
+  `fct_wallet_signals_daily` (raw `wallet_signals_daily` is legacy/unused).
   `sync_state.earliest_at`/`latest_at` are stored as ISO varchar.
 - dbt transformation layer lives in `dbt/`. Python owns `main` schema (raw);
   dbt owns `main_staging` (views), `main_marts` (tables), `main_signals`

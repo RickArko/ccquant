@@ -248,7 +248,9 @@ def sync_all(
         typer.Option("--oi-interval", help="Open interest interval: 1d or 1h"),
     ] = "1h",
     dbt: bool = typer.Option(
-        True, "--dbt/--no-dbt", help="Run dbt build + test after Python sync"
+        True,
+        "--dbt/--no-dbt",
+        help="Run dbt snapshot + build + test after Python sync",
     ),
     wallets: bool = typer.Option(
         True, "--wallets/--no-wallets", help="Run wallet intelligence sync"
@@ -267,7 +269,7 @@ def sync_all(
     5. Macro sync (FRED series, if FRED_API_KEY is set)
     6. Wallet intelligence sync (registry + history + tail)
     7. Tweet import sync (inbox CSV/JSONL)
-    8. dbt build + test (transforms raw -> staging/marts/signals/events)
+    8. dbt snapshot (SCD2 snap_assets) then dbt build + test
     9. Status table
     """
     store, cfg = _load(config)
@@ -342,8 +344,14 @@ def sync_all(
             f"[green]Tweets: {tweet_results.get('imported', 0)} imported[/green]"
         )
 
-    # 8. dbt build + test
+    # 8. dbt snapshot + build + test
     if dbt:
+        console.print("\n[dim]dbt snapshot...[/dim]")
+        snap_ok = _run_dbt("snapshot")
+        if snap_ok:
+            console.print("[green]dbt snapshot: PASS[/green]")
+        else:
+            console.print("[yellow]dbt snapshot: skipped or failed[/yellow]")
         console.print("\n[dim]dbt build...[/dim]")
         dbt_ok = _run_dbt("build")
         if dbt_ok:
@@ -436,7 +444,6 @@ def _export(config: str | None, out: Path, *, fmt: str) -> None:
             "wallet_transfers",
             "wallet_positions_daily",
             "wallet_sync_state",
-            "wallet_signals_daily",
             "wallet_alerts",
             "wallet_identities",
             "wallet_identity_links",

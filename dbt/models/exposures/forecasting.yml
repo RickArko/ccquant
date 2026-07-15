@@ -14,6 +14,19 @@ exposures:
       name: ccquant
       email: dev@localhost
 
+  - name: forecasting_hourly_panel
+    label: Forecasting hourly OHLCV panel
+    type: application
+    maturity: high
+    description: >
+      Python forecasting module reads deduplicated hourly OHLCV from the marts
+      layer when available (load_hourly_panel).
+    depends_on:
+      - ref('fct_ohlcv_hourly')
+    owner:
+      name: ccquant
+      email: dev@localhost
+
   - name: forecasting_signals_panel
     label: Forecasting signals panel
     type: application
@@ -35,6 +48,21 @@ exposures:
       Tweet mention signals consumed by load_tweet_panel() when the mart exists.
     depends_on:
       - ref('fct_tweet_mentions_daily')
+    owner:
+      name: ccquant
+      email: dev@localhost
+
+  - name: ops_data_quality
+    label: Ops data quality / sync freshness
+    type: application
+    maturity: medium
+    description: >
+      Unified sync cursors and alert facts for pipeline health monitoring.
+      Not consumed by forecasting panels.
+    depends_on:
+      - ref('mart_ops_freshness')
+      - ref('fct_wallet_alerts')
+      - ref('fct_tweet_alerts')
     owner:
       name: ccquant
       email: dev@localhost

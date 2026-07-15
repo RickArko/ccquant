@@ -136,17 +136,6 @@ class WalletSyncState:
 
 
 @dataclass(frozen=True)
-class WalletSignalDaily:
-    date: date
-    chain: str
-    smart_money_netflow_usd: float
-    kol_buy_count: int
-    deployer_activity_count: int
-    cabal_alert_count: int
-    top_wallet_accumulation_score: float
-
-
-@dataclass(frozen=True)
 class WalletAlert:
     address: str
     chain: str

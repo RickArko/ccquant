@@ -70,17 +70,32 @@ def load_daily_panel(database: str | Path) -> pl.DataFrame:
 
 
 def load_hourly_panel(database: str | Path) -> pl.DataFrame:
-    """Return hourly OHLCV rows sorted for forecasting pipelines."""
+    """Return hourly OHLCV rows sorted for forecasting pipelines.
+
+    Reads from the dbt marts layer (fct_ohlcv_hourly) when available,
+    falling back to raw ohlcv_hourly for backward compatibility.
+    """
     with _readonly_connect(database) as conn:
-        df = pl.from_arrow(
-            conn.execute(
-                """
-                select symbol, hour, open, high, low, close, volume, source
-                from ohlcv_hourly
-                order by symbol, hour, source
-                """
-            ).to_arrow_table()
-        )
+        if _table_exists(conn, "main_marts", "fct_ohlcv_hourly"):
+            df = pl.from_arrow(
+                conn.execute(
+                    """
+                    select symbol, hour, open, high, low, close, volume, source
+                    from main_marts.fct_ohlcv_hourly
+                    order by symbol, hour
+                    """
+                ).to_arrow_table()
+            )
+        else:
+            df = pl.from_arrow(
+                conn.execute(
+                    """
+                    select symbol, hour, open, high, low, close, volume, source
+                    from ohlcv_hourly
+                    order by symbol, hour, source
+                    """
+                ).to_arrow_table()
+            )
     return df if isinstance(df, pl.DataFrame) else df.to_frame()
 
 
@@ -106,17 +121,13 @@ def load_signals_panel(database: str | Path) -> pl.DataFrame:
 def load_wallet_panel(database: str | Path) -> pl.DataFrame:
     """Return daily wallet flow signals from dbt signals layer."""
     with _readonly_connect(database) as conn:
-        if _table_exists(conn, "main_signals", "fct_wallet_signals_daily"):
-            table = "main_signals.fct_wallet_signals_daily"
-        elif _table_exists(conn, "main", "wallet_signals_daily"):
-            table = "main.wallet_signals_daily"
-        else:
+        if not _table_exists(conn, "main_signals", "fct_wallet_signals_daily"):
             return pl.DataFrame()
         df = pl.from_arrow(
             conn.execute(
-                f"""
+                """
                 select *
-                from {table}
+                from main_signals.fct_wallet_signals_daily
                 order by chain, date
                 """
             ).to_arrow_table()
