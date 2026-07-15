@@ -1,7 +1,7 @@
 date,category,title,description,asset_scope,anticipated_effect_direction,magnitude,confidence,source_url
 2022-05-09,market,"Terra/LUNA UST depeg","UST stablecoin depegs cascading into LUNA collapse; major DeFi TVL shock",DEFI,negative,high,high,https://www.coindesk.com
 2022-11-11,market,"FTX bankruptcy filing","FTX/Alameda collapse freezes CeFi liquidity and hits DeFi risk appetite",DEFI,negative,high,high,https://www.coindesk.com
-2023-06-06,regulatory,"SEC sues Coinbase and Binance window","US SEC intensifies exchange enforcement; DeFi/CEX regulatory risk premium rises",DEFI,negative,medium,medium,https://www.sec.gov
+2023-06-06,regulatory,"SEC sues Coinbase and Binance","US SEC intensifies exchange enforcement; DeFi/CEX regulatory risk premium rises",DEFI,negative,medium,medium,https://www.sec.gov
 2023-06-09,legislative,"EU MiCA published in Official Journal","Markets in Crypto-Assets Regulation enters EU Official Journal; stablecoin/CASP rules path set",DEFI,neutral,medium,high,https://eur-lex.europa.eu
 2024-01-11,regulatory,"SEC approves Bitcoin ETFs","SEC approves spot Bitcoin ETFs including BlackRock, Fidelity, Ark Invest",BTC,positive,high,high,https://www.sec.gov
 2024-04-20,halving,"Bitcoin halving","Fourth Bitcoin halving reducing block reward from 6.25 to 3.125 BTC",BTC,positive,medium,high,https://bitcoinhalving.app
