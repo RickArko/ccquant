@@ -248,7 +248,9 @@ def sync_all(
         typer.Option("--oi-interval", help="Open interest interval: 1d or 1h"),
     ] = "1h",
     dbt: bool = typer.Option(
-        True, "--dbt/--no-dbt", help="Run dbt build + test after Python sync"
+        True,
+        "--dbt/--no-dbt",
+        help="Run dbt snapshot + build + test after Python sync",
     ),
     wallets: bool = typer.Option(
         True, "--wallets/--no-wallets", help="Run wallet intelligence sync"
@@ -267,83 +269,95 @@ def sync_all(
     5. Macro sync (FRED series, if FRED_API_KEY is set)
     6. Wallet intelligence sync (registry + history + tail)
     7. Tweet import sync (inbox CSV/JSONL)
-    8. dbt build + test (transforms raw -> staging/marts/signals/events)
+    8. dbt snapshot (SCD2 snap_assets) then dbt build + test
     9. Status table
     """
     store, cfg = _load(config)
-    syncer = MarketSync(store, cfg)
+    try:
+        syncer = MarketSync(store, cfg)
 
-    async def run() -> None:
-        try:
-            # 1. Universe
-            count = await syncer.update_universe(size=size)
-            console.print(f"[green]Universe updated: {count} assets[/green]")
-
-            # 2. Daily tail-refresh (full=True auto-falls
-            #    back to tail when backfill_complete)
-            console.print("\n[dim]Daily tail-refresh...[/dim]")
-            daily = await syncer.backfill(interval="1d", full=True)
-            console.print(f"[green]Daily: {sum(daily.values())} candles[/green]")
-
-            # 3. Hourly tail-refresh
-            top = hourly_top if hourly_top is not None else cfg.hourly.top
-            console.print(f"\n[dim]Hourly tail-refresh (top {top})...[/dim]")
-            hourly = await syncer.backfill(interval="1h", full=False, top=top)
-            console.print(f"[green]Hourly: {sum(hourly.values())} candles[/green]")
-
-            # 4. Open interest tail-refresh
-            if cfg.open_interest.enabled:
-                console.print(
-                    f"\n[dim]Open interest ({oi_interval})...[/dim]"
-                )
-                oi = await syncer.backfill_oi_all(
-                    interval=oi_interval, full=False, top=top
-                )
-                oi_total = sum(oi.values())
-                console.print(
-                    f"[green]OI: {oi_total} data points[/green]"
-                )
-
-            # 5. Macro sync (FRED)
-            if cfg.macro.enabled:
-                console.print("\n[dim]Macro (FRED)...[/dim]")
-                macro = await syncer.backfill_macro()
-                macro_total = sum(macro.values())
-                console.print(
-                    f"[green]Macro: {macro_total} data points[/green]"
-                )
-        finally:
-            await syncer.close()
-
-    asyncio.run(run())
-
-    # 6. Wallet intelligence
-    if wallets and cfg.wallet_tracking.enabled:
-        console.print("\n[dim]Wallet intelligence...[/dim]")
-        wallet_syncer = WalletSync(store, cfg)
-
-        async def run_wallets() -> dict[str, int]:
+        async def run() -> None:
             try:
-                return await wallet_syncer.sync_all(full=False, tail=True)
+                # 1. Universe
+                count = await syncer.update_universe(size=size)
+                console.print(f"[green]Universe updated: {count} assets[/green]")
+
+                # 2. Daily tail-refresh (full=True auto-falls
+                #    back to tail when backfill_complete)
+                console.print("\n[dim]Daily tail-refresh...[/dim]")
+                daily = await syncer.backfill(interval="1d", full=True)
+                console.print(f"[green]Daily: {sum(daily.values())} candles[/green]")
+
+                # 3. Hourly tail-refresh
+                top = hourly_top if hourly_top is not None else cfg.hourly.top
+                console.print(f"\n[dim]Hourly tail-refresh (top {top})...[/dim]")
+                hourly = await syncer.backfill(interval="1h", full=False, top=top)
+                console.print(f"[green]Hourly: {sum(hourly.values())} candles[/green]")
+
+                # 4. Open interest tail-refresh
+                if cfg.open_interest.enabled:
+                    console.print(
+                        f"\n[dim]Open interest ({oi_interval})...[/dim]"
+                    )
+                    oi = await syncer.backfill_oi_all(
+                        interval=oi_interval, full=False, top=top
+                    )
+                    oi_total = sum(oi.values())
+                    console.print(
+                        f"[green]OI: {oi_total} data points[/green]"
+                    )
+
+                # 5. Macro sync (FRED)
+                if cfg.macro.enabled:
+                    console.print("\n[dim]Macro (FRED)...[/dim]")
+                    macro = await syncer.backfill_macro()
+                    macro_total = sum(macro.values())
+                    console.print(
+                        f"[green]Macro: {macro_total} data points[/green]"
+                    )
             finally:
-                await wallet_syncer.close()
+                await syncer.close()
 
-        wallet_results = asyncio.run(run_wallets())
-        console.print(
-            f"[green]Wallets: {sum(wallet_results.values())} operations[/green]"
-        )
+        asyncio.run(run())
 
-    # 7. Tweet import
-    if tweets and cfg.twitter_tracking.enabled:
-        console.print("\n[dim]Tweet import...[/dim]")
-        tweet_syncer = TwitterSync(store, cfg)
-        tweet_results = tweet_syncer.sync_all()
-        console.print(
-            f"[green]Tweets: {tweet_results.get('imported', 0)} imported[/green]"
-        )
+        # 6. Wallet intelligence
+        if wallets and cfg.wallet_tracking.enabled:
+            console.print("\n[dim]Wallet intelligence...[/dim]")
+            wallet_syncer = WalletSync(store, cfg)
 
-    # 8. dbt build + test
+            async def run_wallets() -> dict[str, int]:
+                try:
+                    return await wallet_syncer.sync_all(full=False, tail=True)
+                finally:
+                    await wallet_syncer.close()
+
+            wallet_results = asyncio.run(run_wallets())
+            console.print(
+                f"[green]Wallets: {sum(wallet_results.values())} operations[/green]"
+            )
+
+        # 7. Tweet import
+        if tweets and cfg.twitter_tracking.enabled:
+            console.print("\n[dim]Tweet import...[/dim]")
+            tweet_syncer = TwitterSync(store, cfg)
+            tweet_results = tweet_syncer.sync_all()
+            console.print(
+                f"[green]Tweets: {tweet_results.get('imported', 0)} imported[/green]"
+            )
+    finally:
+        # Release the Python write lock before dbt opens the same DuckDB file.
+        # DuckDB allows only one writer; keeping MarketStore open causes:
+        # "Conflicting lock is held in ... python3.13".
+        store.close()
+
+    # 8. dbt snapshot + build + test
     if dbt:
+        console.print("\n[dim]dbt snapshot...[/dim]")
+        snap_ok = _run_dbt("snapshot")
+        if snap_ok:
+            console.print("[green]dbt snapshot: PASS[/green]")
+        else:
+            console.print("[yellow]dbt snapshot: skipped or failed[/yellow]")
         console.print("\n[dim]dbt build...[/dim]")
         dbt_ok = _run_dbt("build")
         if dbt_ok:
@@ -351,25 +365,28 @@ def sync_all(
         else:
             console.print("[yellow]dbt build: skipped or failed[/yellow]")
 
-    # 9. Status
-    console.print()
-    table = Table(title="ccquant data status")
-    for col in [
-        "symbol", "rank", "daily rows", "daily range",
-        "hourly rows", "hourly range",
-    ]:
-        table.add_column(col)
-    for row in store.status_rows():
-        table.add_row(
-            str(row["symbol"]),
-            str(row["rank"]),
-            str(row["daily_rows"]),
-            f"{row['daily_from'] or '-'} -> {row['daily_to'] or '-'}",
-            str(row["hourly_rows"]),
-            f"{row['hourly_from'] or '-'} -> {row['hourly_to'] or '-'}",
-        )
-    console.print(table)
-    store.close()
+    # 9. Status (re-open after dbt releases its lock)
+    store, _cfg = _load(config)
+    try:
+        console.print()
+        table = Table(title="ccquant data status")
+        for col in [
+            "symbol", "rank", "daily rows", "daily range",
+            "hourly rows", "hourly range",
+        ]:
+            table.add_column(col)
+        for row in store.status_rows():
+            table.add_row(
+                str(row["symbol"]),
+                str(row["rank"]),
+                str(row["daily_rows"]),
+                f"{row['daily_from'] or '-'} -> {row['daily_to'] or '-'}",
+                str(row["hourly_rows"]),
+                f"{row['hourly_from'] or '-'} -> {row['hourly_to'] or '-'}",
+            )
+        console.print(table)
+    finally:
+        store.close()
 
 
 @app.command("status")
@@ -436,7 +453,6 @@ def _export(config: str | None, out: Path, *, fmt: str) -> None:
             "wallet_transfers",
             "wallet_positions_daily",
             "wallet_sync_state",
-            "wallet_signals_daily",
             "wallet_alerts",
             "wallet_identities",
             "wallet_identity_links",

@@ -41,6 +41,11 @@ jobs:
       - name: Install dbt packages
         run: uv run dbt deps --project-dir dbt --profiles-dir dbt
 
+      - name: Snapshot assets SCD2
+        run: uv run dbt snapshot --project-dir dbt --profiles-dir dbt
+        env:
+          CCQUANT_DB: data/ccquant.duckdb
+
       - name: Build dbt models
         run: uv run dbt build --full-refresh --project-dir dbt --profiles-dir dbt
         env:

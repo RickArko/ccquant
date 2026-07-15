@@ -261,6 +261,13 @@ models:
             - tweet_id
             - alert_type
 
+  - name: stg_tweet_sync_state
+    columns:
+      - name: handle
+        tests:
+          - not_null
+          - unique
+
   - name: stg_wallet_registry
     columns:
       - name: address
@@ -308,20 +315,6 @@ models:
             - chain
             - date
             - asset_mint
-
-  - name: stg_wallet_signals_daily
-    columns:
-      - name: date
-        tests:
-          - not_null
-      - name: chain
-        tests:
-          - not_null
-    tests:
-      - dbt_utils.unique_combination_of_columns:
-          combination_of_columns:
-            - date
-            - chain
 
   - name: stg_wallet_alerts
     columns:

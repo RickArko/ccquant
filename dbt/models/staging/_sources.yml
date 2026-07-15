@@ -79,6 +79,10 @@ sources:
       - name: onchain_sync_state
         description: >
           Per-metric sync metadata for on-chain series. Grain: metric x source.
+        freshness:
+          warn_after: {count: 36, period: hour}
+          error_after: {count: 72, period: hour}
+        loaded_at_field: last_refresh_at
         columns:
           - name: metric
           - name: source
@@ -160,6 +164,21 @@ sources:
           - name: alert_type
           - name: posted_at
 
+      - name: tweet_sync_state
+        description: >
+          Per-handle tweet import cursors. Grain: handle.
+        freshness:
+          warn_after: {count: 36, period: hour}
+          error_after: {count: 72, period: hour}
+        loaded_at_field: last_import_at
+        columns:
+          - name: handle
+          - name: earliest_at
+          - name: latest_at
+          - name: latest_tweet_id
+          - name: last_import_at
+          - name: backfill_complete
+
       - name: wallet_registry
         description: >
           Curated and discovered wallet addresses with labels and provenance.
@@ -201,23 +220,17 @@ sources:
         description: >
           Per-wallet sync cursors for history and tail refresh.
           Grain: address x chain x source.
+        freshness:
+          warn_after: {count: 36, period: hour}
+          error_after: {count: 72, period: hour}
+        loaded_at_field: last_refresh_at
         columns:
           - name: address
           - name: chain
           - name: source
           - name: backfill_complete
           - name: latest_at
-
-      - name: wallet_signals_daily
-        description: >
-          Pre-aggregated wallet flow signals by date and chain.
-          Grain: date x chain.
-        columns:
-          - name: date
-          - name: chain
-          - name: smart_money_netflow_usd
-          - name: kol_buy_count
-          - name: cabal_alert_count
+          - name: last_refresh_at
 
       - name: wallet_alerts
         description: >
