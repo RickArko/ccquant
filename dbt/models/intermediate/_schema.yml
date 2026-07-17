@@ -51,6 +51,44 @@ models:
             - exchange
             - interval
 
+  - name: int_order_book_features
+    description: Order-book snapshot features with date/hour trunc and total notional.
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+      - name: timestamp
+        tests:
+          - not_null
+      - name: exchange
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - symbol
+            - timestamp
+            - exchange
+
+  - name: int_cex_dex_basis
+    description: CEX mid vs DEX price basis in bps (join on symbol x date).
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+      - name: date
+        tests:
+          - not_null
+      - name: venue
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - symbol
+            - date
+            - venue
+
   - name: int_events_by_date
     description: Daily rollup of curated events with positive/negative flags.
     columns:

@@ -101,6 +101,55 @@ sources:
           - name: unit
           - name: interval
 
+      - name: order_book_snapshots
+        description: >
+          Pre-aggregated CEX order-book depth features (bps-band notionals).
+          Grain: symbol x timestamp x exchange. Forward-only self-recorded.
+        columns:
+          - name: symbol
+          - name: timestamp
+          - name: exchange
+          - name: mid
+          - name: best_bid
+          - name: best_ask
+          - name: spread_bps
+          - name: bid_notional_bps_10
+          - name: ask_notional_bps_10
+          - name: bid_notional_bps_25
+          - name: ask_notional_bps_25
+          - name: bid_notional_bps_50
+          - name: ask_notional_bps_50
+          - name: imbalance_bps_25
+          - name: depth_levels
+          - name: last_update_id
+          - name: fetched_at
+
+      - name: dex_price_daily
+        description: >
+          Free DEX/oracle USD prices for CEX-DEX basis.
+          Grain: symbol x date x venue.
+        columns:
+          - name: symbol
+          - name: date
+          - name: venue
+          - name: price_usd
+          - name: source
+
+      - name: mev_boost_payloads
+        description: >
+          MEV-Boost delivered/winning bid payloads (ETH PBS).
+          Grain: slot x relay.
+        columns:
+          - name: slot
+          - name: block_number
+          - name: builder_pubkey
+          - name: proposer_fee_recipient
+          - name: value_wei
+          - name: value_eth
+          - name: relay
+          - name: date
+          - name: source
+
       - name: macro_series
         description: >
           Macro indicator time series (FRED). Grain: series_id x date x source.

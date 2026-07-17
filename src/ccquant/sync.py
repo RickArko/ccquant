@@ -13,19 +13,24 @@ from ccquant.models import (
     DailyOhlcv,
     HourlyOhlcv,
     OpenInterest,
+    OrderBookSnapshot,
     SyncState,
 )
 from ccquant.sources import (
     coinbase_product_id,
     default_binance_pair,
     fetch_binance_daily,
+    fetch_binance_depth,
     fetch_binance_hourly,
     fetch_binance_oi,
+    fetch_bybit_depth,
     fetch_bybit_oi,
     fetch_coinbase_daily,
     fetch_coinbase_hourly,
     fetch_coingecko_daily,
+    fetch_defillama_prices,
     fetch_fred_series,
+    fetch_okx_depth,
     fetch_okx_oi,
     fetch_top_markets,
     probe_binance_pair,
@@ -259,6 +264,133 @@ class MarketSync:
                 )
                 results[asset.symbol] = 0
             await asyncio.sleep(self.config.open_interest.request_delay_seconds)
+        return results
+
+    async def sync_order_book(self, asset: Asset) -> int:
+        ob_cfg = self.config.order_book
+        if not ob_cfg.enabled:
+            return 0
+        snapshots: list[OrderBookSnapshot] = []
+        client = await self.client()
+        limit = ob_cfg.depth_limit
+        if ob_cfg.binance and asset.binance_pair:
+            try:
+                snap = await fetch_binance_depth(
+                    client,
+                    symbol=asset.symbol,
+                    pair=asset.binance_pair,
+                    limit=limit,
+                )
+                if snap is not None:
+                    snapshots.append(snap)
+            except httpx.HTTPError as exc:
+                LOGGER.warning(
+                    "Binance depth fetch failed for %s: %s",
+                    asset.symbol,
+                    exc,
+                )
+        if ob_cfg.bybit and asset.binance_pair:
+            try:
+                snap = await fetch_bybit_depth(
+                    client,
+                    symbol=asset.symbol,
+                    pair=asset.binance_pair,
+                    limit=min(limit, 50),
+                )
+                if snap is not None:
+                    snapshots.append(snap)
+            except httpx.HTTPError as exc:
+                LOGGER.warning(
+                    "Bybit depth fetch failed for %s: %s",
+                    asset.symbol,
+                    exc,
+                )
+        if ob_cfg.okx:
+            try:
+                snap = await fetch_okx_depth(
+                    client,
+                    symbol=asset.symbol,
+                    limit=min(limit, 50),
+                )
+                if snap is not None:
+                    snapshots.append(snap)
+            except httpx.HTTPError as exc:
+                LOGGER.warning(
+                    "OKX depth fetch failed for %s: %s",
+                    asset.symbol,
+                    exc,
+                )
+        if not snapshots:
+            return 0
+        return self.store.upsert_order_book_snapshots(snapshots)
+
+    async def sync_order_book_all(
+        self, *, top: int | None = None
+    ) -> dict[str, int]:
+        if not self.config.order_book.enabled:
+            return {}
+        if not self.store.active_assets():
+            await self.update_universe()
+        limit = top if top is not None else self.config.order_book.top
+        assets = self.store.active_assets(limit=limit)
+        results: dict[str, int] = {}
+        for asset in assets:
+            try:
+                results[asset.symbol] = await self.sync_order_book(asset)
+            except httpx.HTTPError as exc:
+                LOGGER.warning(
+                    "Depth fetch failed for %s: %s", asset.symbol, exc
+                )
+                results[asset.symbol] = 0
+            await asyncio.sleep(self.config.order_book.request_delay_seconds)
+        return results
+
+    async def sync_dex_prices(
+        self, *, top: int | None = None
+    ) -> dict[str, int]:
+        mev_cfg = self.config.mev
+        if not mev_cfg.enabled:
+            return {}
+        if "defillama" not in mev_cfg.dex_venues:
+            return {}
+        if not self.store.active_assets():
+            await self.update_universe()
+        limit = top if top is not None else self.config.order_book.top
+        assets = self.store.active_assets(limit=limit)
+        symbol_to_cg: dict[str, str] = {}
+        for asset in assets:
+            cg_id = asset.coingecko_id or KNOWN_COINGECKO_IDS.get(
+                asset.symbol.upper()
+            )
+            if cg_id:
+                symbol_to_cg[asset.symbol.upper()] = cg_id
+        if not symbol_to_cg:
+            return {}
+        try:
+            points = await fetch_defillama_prices(
+                await self.client(),
+                symbol_to_coingecko_id=symbol_to_cg,
+            )
+        except httpx.HTTPError as exc:
+            LOGGER.warning("DefiLlama price fetch failed: %s", exc)
+            return {}
+        if not points:
+            return {}
+        count = self.store.upsert_dex_price_daily(points)
+        return {"defillama": count}
+
+    async def sync_mev(self, *, top: int | None = None) -> dict[str, int]:
+        """Sync DEX prices and import local MEV-Boost parquet if present."""
+        results: dict[str, int] = {}
+        if not self.config.mev.enabled:
+            return results
+        dex = await self.sync_dex_prices(top=top)
+        results.update(dex)
+        boost_path = self.config.mev.mev_boost_source
+        if boost_path.exists():
+            imported = self.store.import_mev_boost_parquet(boost_path)
+            results["mev_boost"] = imported
+        await asyncio.sleep(self.config.mev.request_delay_seconds)
         return results
 
     async def backfill_macro(self) -> dict[str, int]:

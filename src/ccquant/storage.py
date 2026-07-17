@@ -9,10 +9,13 @@ import duckdb
 from ccquant.models import (
     Asset,
     DailyOhlcv,
+    DexPriceDaily,
     HourlyOhlcv,
     MacroPoint,
+    MevBoostPayload,
     OnchainPoint,
     OpenInterest,
+    OrderBookSnapshot,
     SyncState,
     Tweet,
     TweetAlert,
@@ -139,6 +142,70 @@ class MarketStore:
               unit varchar not null,
               interval varchar not null,
               primary key (symbol, timestamp, exchange, interval)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists order_book_snapshots (
+              symbol varchar not null,
+              timestamp timestamp not null,
+              exchange varchar not null,
+              mid double not null,
+              best_bid double not null,
+              best_ask double not null,
+              spread_bps double not null,
+              bid_notional_bps_10 double not null,
+              ask_notional_bps_10 double not null,
+              bid_notional_bps_25 double not null,
+              ask_notional_bps_25 double not null,
+              bid_notional_bps_50 double not null,
+              ask_notional_bps_50 double not null,
+              imbalance_bps_25 double,
+              depth_levels integer not null,
+              last_update_id bigint,
+              fetched_at timestamp not null,
+              primary key (symbol, timestamp, exchange)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists order_book_sync_state (
+              symbol varchar not null,
+              exchange varchar not null,
+              latest_at timestamp,
+              last_refresh_at timestamp,
+              snapshot_count integer not null default 0,
+              primary key (symbol, exchange)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists dex_price_daily (
+              symbol varchar not null,
+              date date not null,
+              venue varchar not null,
+              price_usd double not null,
+              source varchar not null,
+              primary key (symbol, date, venue)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists mev_boost_payloads (
+              slot bigint not null,
+              block_number bigint,
+              builder_pubkey varchar,
+              proposer_fee_recipient varchar,
+              value_wei double not null,
+              value_eth double not null,
+              relay varchar not null,
+              date date not null,
+              source varchar not null,
+              primary key (slot, relay)
             )
             """
         )
@@ -613,6 +680,245 @@ class MarketStore:
                 ],
             )
         return len(points)
+
+    def upsert_order_book_snapshots(
+        self, snapshots: list[OrderBookSnapshot]
+    ) -> int:
+        for snap in snapshots:
+            self._conn.execute(
+                """
+                insert into order_book_snapshots (
+                  symbol, timestamp, exchange, mid, best_bid, best_ask,
+                  spread_bps, bid_notional_bps_10, ask_notional_bps_10,
+                  bid_notional_bps_25, ask_notional_bps_25,
+                  bid_notional_bps_50, ask_notional_bps_50,
+                  imbalance_bps_25, depth_levels, last_update_id, fetched_at
+                ) values (
+                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                on conflict (symbol, timestamp, exchange) do update set
+                  mid = excluded.mid,
+                  best_bid = excluded.best_bid,
+                  best_ask = excluded.best_ask,
+                  spread_bps = excluded.spread_bps,
+                  bid_notional_bps_10 = excluded.bid_notional_bps_10,
+                  ask_notional_bps_10 = excluded.ask_notional_bps_10,
+                  bid_notional_bps_25 = excluded.bid_notional_bps_25,
+                  ask_notional_bps_25 = excluded.ask_notional_bps_25,
+                  bid_notional_bps_50 = excluded.bid_notional_bps_50,
+                  ask_notional_bps_50 = excluded.ask_notional_bps_50,
+                  imbalance_bps_25 = excluded.imbalance_bps_25,
+                  depth_levels = excluded.depth_levels,
+                  last_update_id = excluded.last_update_id,
+                  fetched_at = excluded.fetched_at
+                """,
+                [
+                    snap.symbol.upper(),
+                    snap.timestamp,
+                    snap.exchange,
+                    snap.mid,
+                    snap.best_bid,
+                    snap.best_ask,
+                    snap.spread_bps,
+                    snap.bid_notional_bps_10,
+                    snap.ask_notional_bps_10,
+                    snap.bid_notional_bps_25,
+                    snap.ask_notional_bps_25,
+                    snap.bid_notional_bps_50,
+                    snap.ask_notional_bps_50,
+                    snap.imbalance_bps_25,
+                    snap.depth_levels,
+                    snap.last_update_id,
+                    snap.fetched_at,
+                ],
+            )
+            self._conn.execute(
+                """
+                insert into order_book_sync_state (
+                  symbol, exchange, latest_at, last_refresh_at, snapshot_count
+                ) values (?, ?, ?, ?, 1)
+                on conflict (symbol, exchange) do update set
+                  latest_at = greatest(
+                    coalesce(order_book_sync_state.latest_at, excluded.latest_at),
+                    excluded.latest_at
+                  ),
+                  last_refresh_at = excluded.last_refresh_at,
+                  snapshot_count = order_book_sync_state.snapshot_count + 1
+                """,
+                [
+                    snap.symbol.upper(),
+                    snap.exchange,
+                    snap.timestamp,
+                    snap.fetched_at,
+                ],
+            )
+        return len(snapshots)
+
+    def upsert_dex_price_daily(self, points: list[DexPriceDaily]) -> int:
+        for point in points:
+            self._conn.execute(
+                """
+                insert into dex_price_daily (
+                  symbol, date, venue, price_usd, source
+                ) values (?, ?, ?, ?, ?)
+                on conflict (symbol, date, venue) do update set
+                  price_usd = excluded.price_usd,
+                  source = excluded.source
+                """,
+                [
+                    point.symbol.upper(),
+                    point.date,
+                    point.venue,
+                    point.price_usd,
+                    point.source,
+                ],
+            )
+        return len(points)
+
+    def upsert_mev_boost_payloads(self, rows: list[MevBoostPayload]) -> int:
+        for row in rows:
+            self._conn.execute(
+                """
+                insert into mev_boost_payloads (
+                  slot, block_number, builder_pubkey, proposer_fee_recipient,
+                  value_wei, value_eth, relay, date, source
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict (slot, relay) do update set
+                  block_number = excluded.block_number,
+                  builder_pubkey = excluded.builder_pubkey,
+                  proposer_fee_recipient = excluded.proposer_fee_recipient,
+                  value_wei = excluded.value_wei,
+                  value_eth = excluded.value_eth,
+                  date = excluded.date,
+                  source = excluded.source
+                """,
+                [
+                    row.slot,
+                    row.block_number,
+                    row.builder_pubkey,
+                    row.proposer_fee_recipient,
+                    row.value_wei,
+                    row.value_eth,
+                    row.relay,
+                    row.date,
+                    row.source,
+                ],
+            )
+        return len(rows)
+
+    def import_mev_boost_parquet(
+        self, source: str | Path, *, relay: str = "flashbots"
+    ) -> int:
+        """Load MEV-Boost winning-bid parquet files into ``mev_boost_payloads``.
+
+        Accepts a directory of ``*.parquet`` or a single parquet file path.
+        Expects at least ``slot`` and ``value`` (wei or ETH) columns; other
+        fields are optional.
+        """
+        path = Path(source)
+        pattern = str(path / "*.parquet") if path.is_dir() else str(path)
+        try:
+            col_rows = self._conn.execute(
+                f"describe select * from read_parquet('{pattern}', "
+                f"union_by_name=true)"
+            ).fetchall()
+        except duckdb.Error:
+            return 0
+        available = {str(r[0]).lower(): str(r[0]) for r in col_rows}
+
+        def pick(*names: str) -> str | None:
+            for name in names:
+                if name.lower() in available:
+                    return available[name.lower()]
+            return None
+
+        slot_c = pick("slot")
+        value_c = pick("value", "value_wei", "bid_value", "value_gwei")
+        if slot_c is None or value_c is None:
+            return 0
+        block_c = pick("block_number", "block_num", "block")
+        builder_c = pick("builder_pubkey", "builder")
+        recipient_c = pick(
+            "proposer_fee_recipient", "fee_recipient", "proposer_fee"
+        )
+        relay_c = pick("relay", "relay_name")
+        date_c = pick("date", "day", "slot_date")
+
+        select_parts = [
+            f"cast({slot_c} as bigint) as slot",
+            (
+                f"cast({block_c} as bigint) as block_number"
+                if block_c
+                else "cast(null as bigint) as block_number"
+            ),
+            (
+                f"cast({builder_c} as varchar) as builder_pubkey"
+                if builder_c
+                else "cast(null as varchar) as builder_pubkey"
+            ),
+            (
+                f"cast({recipient_c} as varchar) as proposer_fee_recipient"
+                if recipient_c
+                else "cast(null as varchar) as proposer_fee_recipient"
+            ),
+            f"cast({value_c} as double) as raw_value",
+            (
+                f"cast({relay_c} as varchar) as relay"
+                if relay_c
+                else f"'{relay}' as relay"
+            ),
+            (
+                f"cast({date_c} as date) as date"
+                if date_c
+                else "cast(null as date) as date"
+            ),
+        ]
+        rows = self._conn.execute(
+            f"""
+            select {", ".join(select_parts)}
+            from read_parquet('{pattern}', union_by_name=true)
+            where {slot_c} is not null
+            """
+        ).fetchall()
+        payloads: list[MevBoostPayload] = []
+        for (
+            slot,
+            block_number,
+            builder_pubkey,
+            proposer_fee_recipient,
+            raw_value,
+            row_relay,
+            row_date,
+        ) in rows:
+            value = float(raw_value)
+            if value >= 1e9:
+                value_wei = value
+                value_eth = value / 1e18
+            else:
+                value_eth = value
+                value_wei = value * 1e18
+            if row_date is None:
+                genesis = 1_606_824_023
+                ts = genesis + int(slot) * 12
+                payload_date = datetime.fromtimestamp(ts, tz=UTC).date()
+            else:
+                payload_date = row_date
+            payloads.append(
+                MevBoostPayload(
+                    slot=int(slot),
+                    block_number=(
+                        int(block_number) if block_number is not None else None
+                    ),
+                    builder_pubkey=builder_pubkey,
+                    proposer_fee_recipient=proposer_fee_recipient,
+                    value_wei=value_wei,
+                    value_eth=value_eth,
+                    relay=str(row_relay or relay),
+                    date=payload_date,
+                    source="mevboost-data",
+                )
+            )
+        return self.upsert_mev_boost_payloads(payloads)
 
     def upsert_macro_series(self, points: list[MacroPoint]) -> int:
         for point in points:

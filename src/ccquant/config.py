@@ -52,6 +52,27 @@ class OpenInterestConfig:
     okx: bool = True
 
 
+@dataclass(frozen=True)
+class OrderBookConfig:
+    enabled: bool = True
+    top: int = 20
+    depth_limit: int = 100
+    request_delay_seconds: float = 0.25
+    binance: bool = True
+    bybit: bool = True
+    okx: bool = True
+
+
+@dataclass(frozen=True)
+class MevConfig:
+    enabled: bool = True
+    dex_venues: list[str] = field(default_factory=lambda: ["defillama"])
+    mev_boost_source: Path = field(
+        default_factory=lambda: Path("data/mev/mevboost")
+    )
+    request_delay_seconds: float = 1.0
+
+
 FRED_SERIES: list[str] = [
     "M2SL",
     "WALCL",
@@ -199,6 +220,8 @@ class AppConfig:
     open_interest: OpenInterestConfig = field(
         default_factory=OpenInterestConfig
     )
+    order_book: OrderBookConfig = field(default_factory=OrderBookConfig)
+    mev: MevConfig = field(default_factory=MevConfig)
     macro: MacroConfig = field(default_factory=MacroConfig)
     wallet_tracking: WalletTrackingConfig = field(
         default_factory=WalletTrackingConfig
@@ -226,6 +249,8 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     daily_data = data.get("daily", {}) or {}
     hourly_data = data.get("hourly", {}) or {}
     oi_data = data.get("open_interest", {}) or {}
+    order_book_data = data.get("order_book", {}) or {}
+    mev_data = data.get("mev", {}) or {}
     macro_data = data.get("macro", {}) or {}
     wallet_data = data.get("wallet_tracking", {}) or {}
     twitter_data = data.get("twitter_tracking", {}) or {}
@@ -265,6 +290,30 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             binance=bool(oi_data.get("binance", True)),
             bybit=bool(oi_data.get("bybit", True)),
             okx=bool(oi_data.get("okx", True)),
+        ),
+        order_book=OrderBookConfig(
+            enabled=bool(order_book_data.get("enabled", True)),
+            top=int(order_book_data.get("top", 20)),
+            depth_limit=int(order_book_data.get("depth_limit", 100)),
+            request_delay_seconds=float(
+                order_book_data.get("request_delay_seconds", 0.25)
+            ),
+            binance=bool(order_book_data.get("binance", True)),
+            bybit=bool(order_book_data.get("bybit", True)),
+            okx=bool(order_book_data.get("okx", True)),
+        ),
+        mev=MevConfig(
+            enabled=bool(mev_data.get("enabled", True)),
+            dex_venues=[
+                str(v).lower()
+                for v in mev_data.get("dex_venues", ["defillama"])
+            ],
+            mev_boost_source=Path(
+                str(mev_data.get("mev_boost_source", "data/mev/mevboost"))
+            ),
+            request_delay_seconds=float(
+                mev_data.get("request_delay_seconds", 1.0)
+            ),
         ),
         macro=MacroConfig(
             enabled=bool(macro_data.get("enabled", True)),

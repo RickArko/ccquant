@@ -32,6 +32,9 @@ uv run ccquant sync all                    # one-command update: universe + dail
 uv run ccquant sync universe [--size N] [--config FILE]   # fetch top-cap universe + probe exchange pairs
 uv run ccquant sync backfill --interval {1d|1h} [--top N] [--full|--tail] [--force] [--config FILE]
 uv run ccquant sync oi [--interval {1d|1h}] [--top N] [--full|--tail]   # open interest (Binance+Bybit+OKX)
+uv run ccquant sync depth [--top N]        # CEX order-book depth snapshots (bps features)
+uv run ccquant sync mev [--top N]          # DEX prices + local MEV-Boost parquet
+uv run ccquant import mev-boost --source DIR  # land MEV-Boost parquet dumps
 uv run ccquant sync macro                  # FRED macro series
 uv run ccquant sync wallets --no-tail    # wallet registry only (start here; no RPC)
 uv run ccquant sync wallets --full       # force historical extract
@@ -94,10 +97,11 @@ dbt step (e.g. when dbt isn't installed). Use `--no-wallets` to skip wallet sync
   `universe.source_preference`. **Hourly has no CoinGecko fallback** (daily only); a
   symbol with neither Binance pair nor Coinbase product yields zero hourly candles.
 - DuckDB tables: `assets`, `ohlcv_daily`, `ohlcv_hourly`, `sync_state`,
-  `onchain_series`, `onchain_sync_state`, `open_interest`, `macro_series`,
-  `macro_sync_state`, `wallet_registry`, `wallet_transfers`,
-  `wallet_positions_daily`, `wallet_sync_state`, `wallet_alerts`,
-  `wallet_identities`, `wallet_identity_links`. Schema is
+  `onchain_series`, `onchain_sync_state`, `open_interest`,
+  `order_book_snapshots`, `order_book_sync_state`, `dex_price_daily`,
+  `mev_boost_payloads`, `macro_series`, `macro_sync_state`, `wallet_registry`,
+  `wallet_transfers`, `wallet_positions_daily`, `wallet_sync_state`,
+  `wallet_alerts`, `wallet_identities`, `wallet_identity_links`. Schema is
   created idempotently on `MarketStore` init. Wallet flow analytics use dbt
   `fct_wallet_signals_daily` (raw `wallet_signals_daily` is legacy/unused).
   `sync_state.earliest_at`/`latest_at` are stored as ISO varchar.
@@ -109,6 +113,10 @@ dbt step (e.g. when dbt isn't installed). Use `--no-wallets` to skip wallet sync
   `--project-dir dbt --profiles-dir dbt`.
 - Open interest has per-exchange config toggles (`open_interest.binance/bybit/okx`).
   Disable any exchange in config without breaking the aggregate mart.
+- Order-book depth mirrors OI toggles (`order_book.binance/bybit/okx`). Free REST
+  books are live-only — `sync depth` self-records forward snapshots (bps-band
+  features, not full L2 ladders). MEV/arb marts (`fct_cex_dex_basis`,
+  `mart_mev_arb_daily`) are separate from `mart_signals_daily`.
 - Optional extras: `uv sync --extra forecast` (numpy/pandas/scikit-learn/statsmodels) and
   `--extra notebook` (jupyterlab/plotly/ipykernel; also included in default
   `dependency-groups.dev` / `--extra dev`). `forecasting.py` itself uses only core deps

@@ -150,3 +150,37 @@ def load_tweet_panel(database: str | Path) -> pl.DataFrame:
             ).to_arrow_table()
         )
     return df if isinstance(df, pl.DataFrame) else df.to_frame()
+
+
+def load_order_book_panel(database: str | Path) -> pl.DataFrame:
+    """Return cross-exchange order-book depth aggregates from dbt marts."""
+    with _readonly_connect(database) as conn:
+        if not _table_exists(conn, "main_marts", "fct_order_book_agg"):
+            return pl.DataFrame()
+        df = pl.from_arrow(
+            conn.execute(
+                """
+                select *
+                from main_marts.fct_order_book_agg
+                order by symbol, timestamp
+                """
+            ).to_arrow_table()
+        )
+    return df if isinstance(df, pl.DataFrame) else df.to_frame()
+
+
+def load_mev_panel(database: str | Path) -> pl.DataFrame:
+    """Return daily MEV/arbitrage panel (depth + basis + MEV-Boost context)."""
+    with _readonly_connect(database) as conn:
+        if not _table_exists(conn, "main_marts", "mart_mev_arb_daily"):
+            return pl.DataFrame()
+        df = pl.from_arrow(
+            conn.execute(
+                """
+                select *
+                from main_marts.mart_mev_arb_daily
+                order by symbol, date
+                """
+            ).to_arrow_table()
+        )
+    return df if isinstance(df, pl.DataFrame) else df.to_frame()

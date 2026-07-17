@@ -5,7 +5,12 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from ccquant.forecasting import load_hourly_panel, load_wallet_panel
+from ccquant.forecasting import (
+    load_hourly_panel,
+    load_mev_panel,
+    load_order_book_panel,
+    load_wallet_panel,
+)
 from ccquant.models import HourlyOhlcv
 from ccquant.storage import MarketStore
 
@@ -94,3 +99,17 @@ def test_load_wallet_panel_empty_without_mart(tmp_path: Path) -> None:
     store.close()
     df = load_wallet_panel(db)
     assert df.is_empty()
+
+
+def test_load_order_book_panel_empty_without_mart(tmp_path: Path) -> None:
+    db = tmp_path / "ob_panel.duckdb"
+    store = MarketStore(db)
+    store.close()
+    assert load_order_book_panel(db).is_empty()
+
+
+def test_load_mev_panel_empty_without_mart(tmp_path: Path) -> None:
+    db = tmp_path / "mev_panel.duckdb"
+    store = MarketStore(db)
+    store.close()
+    assert load_mev_panel(db).is_empty()

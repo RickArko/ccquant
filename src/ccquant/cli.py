@@ -21,12 +21,14 @@ app = typer.Typer(help="Crypto OHLCV data and forecasting research toolkit")
 sync_app = typer.Typer(help="Fetch and refresh market data")
 export_app = typer.Typer(help="Export DuckDB tables")
 migrate_app = typer.Typer(help="Migrate data between databases")
+import_app = typer.Typer(help="Import external datasets into DuckDB")
 db_app = typer.Typer(help="Database backup and maintenance")
 wallet_app = typer.Typer(help="Wallet intelligence and on-chain tracking")
 twitter_app = typer.Typer(help="Twitter / X tweet tracking (import-only)")
 app.add_typer(sync_app, name="sync")
 app.add_typer(export_app, name="export")
 app.add_typer(migrate_app, name="migrate")
+app.add_typer(import_app, name="import")
 app.add_typer(db_app, name="db")
 app.add_typer(wallet_app, name="wallet")
 app.add_typer(twitter_app, name="twitter")
@@ -180,6 +182,56 @@ def sync_macro(
         console.print(f"  {series_id}: {count}")
 
 
+@sync_app.command("depth")
+def sync_depth(
+    config: str | None = typer.Option(None, "--config", "-c"),
+    top: int | None = typer.Option(
+        None, "--top", help="Limit to top-N ranked assets"
+    ),
+) -> None:
+    """Poll free CEX order-book depth and store bps-band volume features."""
+    store, cfg = _load(config)
+    syncer = MarketSync(store, cfg)
+
+    async def run() -> dict[str, int]:
+        try:
+            return await syncer.sync_order_book_all(top=top)
+        finally:
+            await syncer.close()
+            store.close()
+
+    results = asyncio.run(run())
+    total = sum(results.values())
+    console.print(f"[green]Depth sync complete: {total} snapshots[/green]")
+    for symbol, count in sorted(results.items()):
+        if count:
+            console.print(f"  {symbol}: {count}")
+
+
+@sync_app.command("mev")
+def sync_mev(
+    config: str | None = typer.Option(None, "--config", "-c"),
+    top: int | None = typer.Option(
+        None, "--top", help="Limit DEX price fetch to top-N assets"
+    ),
+) -> None:
+    """Sync DEX USD prices and import local MEV-Boost parquet if present."""
+    store, cfg = _load(config)
+    syncer = MarketSync(store, cfg)
+
+    async def run() -> dict[str, int]:
+        try:
+            return await syncer.sync_mev(top=top)
+        finally:
+            await syncer.close()
+            store.close()
+
+    results = asyncio.run(run())
+    console.print("[green]MEV sync complete[/green]")
+    for key, count in sorted(results.items()):
+        console.print(f"  {key}: {count}")
+
+
 @sync_app.command("wallets")
 def sync_wallets(
     config: str | None = typer.Option(None, "--config", "-c"),
@@ -258,19 +310,27 @@ def sync_all(
     tweets: bool = typer.Option(
         True, "--tweets/--no-tweets", help="Run tweet import sync"
     ),
+    depth: bool = typer.Option(
+        True, "--depth/--no-depth", help="Poll CEX order-book depth"
+    ),
+    mev: bool = typer.Option(
+        True, "--mev/--no-mev", help="Sync DEX prices + local MEV-Boost import"
+    ),
 ) -> None:
-    """Sync everything: universe + daily + hourly + OI + macro + wallets + tweets + dbt.
+    """Sync universe, OHLCV, OI, depth, MEV, macro, wallets, tweets, then dbt.
 
     One command to bring the local DB up to today. Runs:
     1. Universe refresh (top-cap rankings + exchange pair probes)
     2. Daily tail-refresh (full backfill already complete)
     3. Hourly tail-refresh (top-N assets)
     4. Open interest tail-refresh (Binance + Bybit + OKX, per config toggles)
-    5. Macro sync (FRED series, if FRED_API_KEY is set)
-    6. Wallet intelligence sync (registry + history + tail)
-    7. Tweet import sync (inbox CSV/JSONL)
-    8. dbt snapshot (SCD2 snap_assets) then dbt build + test
-    9. Status table
+    5. Order-book depth snapshots (bps-band volume features)
+    6. MEV sync (DEX prices + optional local MEV-Boost parquet)
+    7. Macro sync (FRED series, if FRED_API_KEY is set)
+    8. Wallet intelligence sync (registry + history + tail)
+    9. Tweet import sync (inbox CSV/JSONL)
+    10. dbt snapshot (SCD2 snap_assets) then dbt build + test
+    11. Status table
     """
     store, cfg = _load(config)
     try:
@@ -307,7 +367,29 @@ def sync_all(
                         f"[green]OI: {oi_total} data points[/green]"
                     )
 
-                # 5. Macro sync (FRED)
+                # 5. Order-book depth
+                if depth and cfg.order_book.enabled:
+                    depth_top = cfg.order_book.top
+                    console.print(
+                        f"\n[dim]Order-book depth (top {depth_top})...[/dim]"
+                    )
+                    depth_results = await syncer.sync_order_book_all(
+                        top=depth_top
+                    )
+                    console.print(
+                        f"[green]Depth: {sum(depth_results.values())} "
+                        f"snapshots[/green]"
+                    )
+
+                # 6. MEV (DEX prices + local boost parquet)
+                if mev and cfg.mev.enabled:
+                    console.print("\n[dim]MEV (DEX prices / boost)...[/dim]")
+                    mev_results = await syncer.sync_mev(top=cfg.order_book.top)
+                    console.print(
+                        f"[green]MEV: {sum(mev_results.values())} rows[/green]"
+                    )
+
+                # 7. Macro sync (FRED)
                 if cfg.macro.enabled:
                     console.print("\n[dim]Macro (FRED)...[/dim]")
                     macro = await syncer.backfill_macro()
@@ -447,6 +529,10 @@ def _export(config: str | None, out: Path, *, fmt: str) -> None:
             "onchain_series",
             "onchain_sync_state",
             "open_interest",
+            "order_book_snapshots",
+            "order_book_sync_state",
+            "dex_price_daily",
+            "mev_boost_payloads",
             "macro_series",
             "macro_sync_state",
             "wallet_registry",
@@ -465,6 +551,30 @@ def _export(config: str | None, out: Path, *, fmt: str) -> None:
         ]:
             path = store.export_table(table, out, fmt=fmt)
             console.print(f"[green]wrote[/green] {path}")
+    finally:
+        store.close()
+
+
+@import_app.command("mev-boost")
+def import_mev_boost(
+    config: str | None = typer.Option(None, "--config", "-c"),
+    source: str = typer.Option(
+        ...,
+        "--source",
+        "-s",
+        help="Parquet file or directory (e.g. data/mev/mevboost)",
+    ),
+    relay: str = typer.Option(
+        "flashbots", "--relay", help="Default relay label when column missing"
+    ),
+) -> None:
+    """Import MEV-Boost winning-bid parquet dumps into ``mev_boost_payloads``."""
+    store, _cfg = _load(config)
+    try:
+        count = store.import_mev_boost_parquet(source, relay=relay)
+        console.print(
+            f"[green]Imported {count} MEV-Boost payload rows from {source}[/green]"
+        )
     finally:
         store.close()
 

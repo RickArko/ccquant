@@ -174,6 +174,81 @@ models:
             - exchange
             - interval
 
+  - name: stg_order_book_snapshots
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+      - name: timestamp
+        tests:
+          - not_null
+      - name: exchange
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['binance', 'bybit', 'okx']
+      - name: mid
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: spread_bps
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - symbol
+            - timestamp
+            - exchange
+
+  - name: stg_dex_price_daily
+    columns:
+      - name: symbol
+        tests:
+          - not_null
+      - name: date
+        tests:
+          - not_null
+      - name: venue
+        tests:
+          - not_null
+      - name: price_usd
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - symbol
+            - date
+            - venue
+
+  - name: stg_mev_boost_payloads
+    columns:
+      - name: slot
+        tests:
+          - not_null
+      - name: value_eth
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: relay
+        tests:
+          - not_null
+      - name: date
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - slot
+            - relay
+
   - name: stg_macro_series
     columns:
       - name: series_id
