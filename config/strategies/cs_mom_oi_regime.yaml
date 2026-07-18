@@ -1,0 +1,57 @@
+# Cross-sectional momentum + OI change, gated by lagged macro liquidity regime.
+name: cs_mom_oi_regime
+
+hypothesis:
+  name: cs_mom_oi_regime
+  story: >
+    Within the liquid crypto universe, relative momentum and rising open interest
+    identify names with positive risk-adjusted excess returns vs equal-weight,
+    but only when global liquidity is not in a risk-off regime.
+  horizon_days: 5
+  failure_modes:
+    - regime break / liquidity shock
+    - ADV collapse / capacity exhaustion
+    - momentum crashes after crowded longs
+
+label:
+  horizons: [5, 20]
+  primary_horizon: 5
+
+cost:
+  fee_bps_rt: 10.0
+  slippage_coef: 0.10
+
+walk_forward:
+  train_days: 252
+  test_days: 63
+  step_days: 63
+  embargo_days: 20
+
+portfolio:
+  n_quantiles: 5
+  vol_target_ann: 0.10
+  min_adv_usd: 1000000
+  rebalance: weekly
+  adv_window: 20
+
+regime:
+  lag_days: 1
+  risk_off_z: -0.5
+  z_window: 60
+
+universe:
+  top_n: 50
+
+features:
+  mom_windows: [20, 60]
+  vol_window: 20
+  volume_z_window: 20
+  oi_change_window: 20
+  macro_lag_days: 1
+
+gates:
+  min_net_sharpe: 0.0
+  min_ir: 0.0
+
+target_notional_usd: 1000000
+max_participation: 0.01

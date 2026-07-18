@@ -84,6 +84,17 @@ uv run ccquant export csv --out data/export
 These exports are intended as stable inputs for notebooks, model training, and
 external forecast pipelines.
 
+## Strategy research
+
+Walk-forward, cost-aware strategy template over `mart_signals_daily`:
+
+```bash
+uv run ccquant research run --strategy cs_mom_oi_regime
+```
+
+See [`documentation/strategy_research.md`](documentation/strategy_research.md) and
+`notebooks/Strategy_Template.ipynb`.
+
 ## Forecasting Direction
 
 Keep data ingestion deterministic and boring. Add models in layers:
@@ -154,6 +165,12 @@ regime turning points, and backtests forward BTC returns conditional on regime.
 </p>
 
 <p align="center"><em>Global Liquidity Composite (z-scored M2 growth + Fed BS growth &minus; real rate change) vs BTC price. Crypto is a high-beta claim on liquidity.</em></p>
+
+### Strategy Template — Risk-Adjusted CS Alpha (`Strategy_Template.ipynb`)
+
+Walk-forward cross-sectional long/short template (`cs_mom_oi_regime`) over
+`mart_signals_daily`: PIT features, costs/capacity, purged folds, scale gates.
+See [`documentation/strategy_research.md`](documentation/strategy_research.md).
 
 ### On-Chain BTC Direction Signals (`OnChain_BTC.ipynb`)
 
