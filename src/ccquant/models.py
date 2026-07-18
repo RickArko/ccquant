@@ -76,6 +76,58 @@ class OpenInterest:
 
 
 @dataclass(frozen=True)
+class OrderBookSnapshot:
+    symbol: str
+    timestamp: datetime
+    exchange: str
+    mid: float
+    best_bid: float
+    best_ask: float
+    spread_bps: float
+    bid_notional_bps_10: float
+    ask_notional_bps_10: float
+    bid_notional_bps_25: float
+    ask_notional_bps_25: float
+    bid_notional_bps_50: float
+    ask_notional_bps_50: float
+    imbalance_bps_25: float | None
+    depth_levels: int
+    last_update_id: int | None
+    fetched_at: datetime
+
+
+@dataclass
+class OrderBookSyncState:
+    symbol: str
+    exchange: str
+    latest_at: datetime | None = None
+    last_refresh_at: datetime | None = None
+    snapshot_count: int = 0
+
+
+@dataclass(frozen=True)
+class DexPriceDaily:
+    symbol: str
+    date: date
+    venue: str
+    price_usd: float
+    source: str
+
+
+@dataclass(frozen=True)
+class MevBoostPayload:
+    slot: int
+    block_number: int | None
+    builder_pubkey: str | None
+    proposer_fee_recipient: str | None
+    value_wei: float
+    value_eth: float
+    relay: str
+    date: date
+    source: str
+
+
+@dataclass(frozen=True)
 class MacroPoint:
     series_id: str
     date: date

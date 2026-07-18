@@ -28,7 +28,7 @@ uv sync --extra dev --extra forecast
 # Full pipeline incl. dbt + wallet/BigQuery
 uv sync --extra dev --extra forecast --extra dbt --extra wallet
 
-uv run ccquant sync all                     # one-command update: universe + daily + hourly + status
+uv run ccquant sync all                     # universe + OHLCV + OI + depth + MEV + macro + wallets + dbt
 uv run ccquant sync universe --size 100
 uv run ccquant sync backfill --interval 1d
 # If history looks too short (e.g. after a geo-blocked Binance run marked complete):

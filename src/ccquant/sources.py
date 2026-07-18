@@ -5,7 +5,14 @@ from datetime import UTC, date, datetime, timedelta
 
 import httpx
 
-from ccquant.models import DailyOhlcv, HourlyOhlcv, MacroPoint, OpenInterest
+from ccquant.models import (
+    DailyOhlcv,
+    DexPriceDaily,
+    HourlyOhlcv,
+    MacroPoint,
+    OpenInterest,
+    OrderBookSnapshot,
+)
 
 BINANCE_API = "https://api.binance.com"
 BINANCE_FAPI = "https://fapi.binance.com"
@@ -14,6 +21,7 @@ OKX_API = "https://www.okx.com"
 COINBASE_API = "https://api.coinbase.com"
 COINGECKO_API = "https://api.coingecko.com/api/v3"
 FRED_API = "https://api.stlouisfed.org"
+DEFILLAMA_COINS_API = "https://coins.llama.fi"
 MS_PER_DAY = 86_400_000
 MS_PER_HOUR = 3_600_000
 COINBASE_DAILY_CHUNK_DAYS = 300
@@ -548,6 +556,275 @@ async def fetch_okx_oi(
         if len(batch) < 100:
             break
         after_ms = int(batch[-1]["ts"])
+    return points
+
+
+def extract_depth_features(
+    bids: list[tuple[float, float]],
+    asks: list[tuple[float, float]],
+    *,
+    bands: tuple[int, ...] = (10, 25, 50),
+) -> dict[str, float | int | None]:
+    """Compute mid/spread/bps-band notionals from a limit book.
+
+    ``bids`` / ``asks`` are ``(price, qty)`` levels. Returns empty dict if
+    either side is empty.
+    """
+    if not bids or not asks:
+        return {}
+    best_bid = max(price for price, _ in bids)
+    best_ask = min(price for price, _ in asks)
+    if best_bid <= 0 or best_ask <= 0 or best_ask < best_bid:
+        return {}
+    mid = (best_bid + best_ask) / 2.0
+    spread_bps = (best_ask - best_bid) / mid * 10_000.0
+
+    def _band_notional(
+        levels: list[tuple[float, float]], *, side: str, band_bps: int
+    ) -> float:
+        width = mid * (band_bps / 10_000.0)
+        total = 0.0
+        for price, qty in levels:
+            if side == "bid":
+                if price < mid - width:
+                    continue
+            else:
+                if price > mid + width:
+                    continue
+            total += price * qty
+        return total
+
+    features: dict[str, float | int | None] = {
+        "mid": mid,
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "spread_bps": spread_bps,
+        "depth_levels": len(bids) + len(asks),
+    }
+    band_vals: dict[int, tuple[float, float]] = {}
+    for band in bands:
+        bid_n = _band_notional(bids, side="bid", band_bps=band)
+        ask_n = _band_notional(asks, side="ask", band_bps=band)
+        band_vals[band] = (bid_n, ask_n)
+        features[f"bid_notional_bps_{band}"] = bid_n
+        features[f"ask_notional_bps_{band}"] = ask_n
+    bid_25, ask_25 = band_vals.get(25, (0.0, 0.0))
+    denom = bid_25 + ask_25
+    features["imbalance_bps_25"] = (
+        (bid_25 - ask_25) / denom if denom > 0 else None
+    )
+    return features
+
+
+def _parse_levels(raw: list[list[str] | list[float]]) -> list[tuple[float, float]]:
+    levels: list[tuple[float, float]] = []
+    for row in raw:
+        if len(row) < 2:
+            continue
+        levels.append((float(row[0]), float(row[1])))
+    return levels
+
+
+def _snapshot_from_features(
+    *,
+    symbol: str,
+    exchange: str,
+    features: dict[str, float | int | None],
+    timestamp: datetime,
+    fetched_at: datetime,
+    last_update_id: int | None,
+) -> OrderBookSnapshot | None:
+    if not features:
+        return None
+    imbalance = features.get("imbalance_bps_25")
+    return OrderBookSnapshot(
+        symbol=symbol.upper(),
+        timestamp=timestamp,
+        exchange=exchange,
+        mid=float(features["mid"] or 0.0),
+        best_bid=float(features["best_bid"] or 0.0),
+        best_ask=float(features["best_ask"] or 0.0),
+        spread_bps=float(features["spread_bps"] or 0.0),
+        bid_notional_bps_10=float(features.get("bid_notional_bps_10") or 0.0),
+        ask_notional_bps_10=float(features.get("ask_notional_bps_10") or 0.0),
+        bid_notional_bps_25=float(features.get("bid_notional_bps_25") or 0.0),
+        ask_notional_bps_25=float(features.get("ask_notional_bps_25") or 0.0),
+        bid_notional_bps_50=float(features.get("bid_notional_bps_50") or 0.0),
+        ask_notional_bps_50=float(features.get("ask_notional_bps_50") or 0.0),
+        imbalance_bps_25=float(imbalance) if imbalance is not None else None,
+        depth_levels=int(features.get("depth_levels") or 0),
+        last_update_id=last_update_id,
+        fetched_at=fetched_at,
+    )
+
+
+async def fetch_binance_depth(
+    client: httpx.AsyncClient,
+    *,
+    symbol: str,
+    pair: str,
+    limit: int = 100,
+) -> OrderBookSnapshot | None:
+    resp = await client.get(
+        f"{BINANCE_API}/api/v3/depth",
+        params={"symbol": pair.upper(), "limit": limit},
+    )
+    if resp.status_code in {400, 403, 404}:
+        return None
+    resp.raise_for_status()
+    data = resp.json()
+    bids = _parse_levels(data.get("bids", []))
+    asks = _parse_levels(data.get("asks", []))
+    now = datetime.now(tz=UTC).replace(microsecond=0)
+    features = extract_depth_features(bids, asks)
+    last_update_id = data.get("lastUpdateId")
+    return _snapshot_from_features(
+        symbol=symbol,
+        exchange="binance",
+        features=features,
+        timestamp=now,
+        fetched_at=now,
+        last_update_id=int(last_update_id) if last_update_id is not None else None,
+    )
+
+
+async def fetch_bybit_depth(
+    client: httpx.AsyncClient,
+    *,
+    symbol: str,
+    pair: str,
+    limit: int = 50,
+) -> OrderBookSnapshot | None:
+    resp = await client.get(
+        f"{BYBIT_API}/v5/market/orderbook",
+        params={
+            "category": "spot",
+            "symbol": pair.upper(),
+            "limit": min(limit, 200),
+        },
+    )
+    if resp.status_code in {400, 403, 404}:
+        return None
+    resp.raise_for_status()
+    payload = resp.json()
+    if payload.get("retCode") != 0:
+        return None
+    result = payload.get("result", {})
+    bids = _parse_levels(result.get("b", []))
+    asks = _parse_levels(result.get("a", []))
+    ts_ms = result.get("ts")
+    now = datetime.now(tz=UTC).replace(microsecond=0)
+    timestamp = (
+        datetime.fromtimestamp(int(ts_ms) / 1000, tz=UTC).replace(microsecond=0)
+        if ts_ms is not None
+        else now
+    )
+    features = extract_depth_features(bids, asks)
+    update_id = result.get("u")
+    return _snapshot_from_features(
+        symbol=symbol,
+        exchange="bybit",
+        features=features,
+        timestamp=timestamp,
+        fetched_at=now,
+        last_update_id=int(update_id) if update_id is not None else None,
+    )
+
+
+def okx_spot_inst_id(symbol: str) -> str:
+    return f"{symbol.upper()}-USDT"
+
+
+async def fetch_okx_depth(
+    client: httpx.AsyncClient,
+    *,
+    symbol: str,
+    limit: int = 50,
+) -> OrderBookSnapshot | None:
+    resp = await client.get(
+        f"{OKX_API}/api/v5/market/books",
+        params={"instId": okx_spot_inst_id(symbol), "sz": min(limit, 400)},
+    )
+    if resp.status_code in {400, 403, 404}:
+        return None
+    resp.raise_for_status()
+    payload = resp.json()
+    if payload.get("code") != "0":
+        return None
+    batch = payload.get("data", [])
+    if not batch:
+        return None
+    book = batch[0]
+    bids = _parse_levels(book.get("bids", []))
+    asks = _parse_levels(book.get("asks", []))
+    ts_ms = book.get("ts")
+    now = datetime.now(tz=UTC).replace(microsecond=0)
+    timestamp = (
+        datetime.fromtimestamp(int(ts_ms) / 1000, tz=UTC).replace(microsecond=0)
+        if ts_ms is not None
+        else now
+    )
+    features = extract_depth_features(bids, asks)
+    seq = book.get("seqId")
+    return _snapshot_from_features(
+        symbol=symbol,
+        exchange="okx",
+        features=features,
+        timestamp=timestamp,
+        fetched_at=now,
+        last_update_id=int(seq) if seq is not None else None,
+    )
+
+
+async def fetch_defillama_prices(
+    client: httpx.AsyncClient,
+    *,
+    symbol_to_coingecko_id: dict[str, str],
+) -> list[DexPriceDaily]:
+    """Fetch current USD prices from DefiLlama coins API (keyless)."""
+    if not symbol_to_coingecko_id:
+        return []
+    keys = [
+        f"coingecko:{cg_id}"
+        for cg_id in symbol_to_coingecko_id.values()
+    ]
+    resp = await client.get(
+        f"{DEFILLAMA_COINS_API}/prices/current/{','.join(keys)}"
+    )
+    if resp.status_code in {400, 403, 404}:
+        return []
+    resp.raise_for_status()
+    coins = resp.json().get("coins", {})
+    cg_to_symbol = {
+        cg_id: symbol.upper()
+        for symbol, cg_id in symbol_to_coingecko_id.items()
+    }
+    points: list[DexPriceDaily] = []
+    today = date.today()
+    for key, payload in coins.items():
+        # key like "coingecko:bitcoin"
+        cg_id = key.split(":", 1)[-1]
+        symbol = cg_to_symbol.get(cg_id)
+        if symbol is None:
+            continue
+        price = payload.get("price")
+        if price is None:
+            continue
+        ts = payload.get("timestamp")
+        price_date = (
+            datetime.fromtimestamp(int(ts), tz=UTC).date()
+            if ts is not None
+            else today
+        )
+        points.append(
+            DexPriceDaily(
+                symbol=symbol,
+                date=price_date,
+                venue="defillama",
+                price_usd=float(price),
+                source="defillama",
+            )
+        )
     return points
 
 

@@ -26,6 +26,19 @@ open_interest:
   binance: true
   bybit: true
   okx: true
+order_book:
+  enabled: true
+  top: 20
+  depth_limit: 100
+  request_delay_seconds: 0.25
+  binance: true
+  bybit: true
+  okx: true
+mev:
+  enabled: true
+  dex_venues: [defillama]
+  mev_boost_source: data/mev/mevboost
+  request_delay_seconds: 1.0
 macro:
   enabled: true
   series_ids:

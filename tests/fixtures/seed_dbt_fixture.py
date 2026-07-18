@@ -30,6 +30,10 @@ def seed_dbt_ci_fixture(database: str | Path | None = None) -> Path:
         "macro_series",
         "macro_sync_state",
         "open_interest",
+        "order_book_snapshots",
+        "order_book_sync_state",
+        "dex_price_daily",
+        "mev_boost_payloads",
         "tweet_signals_daily",
         "wallet_registry",
         "wallet_transfers",
@@ -93,6 +97,42 @@ def seed_dbt_ci_fixture(database: str | Path | None = None) -> Path:
                     """,
                     [symbol, datetime.combine(day, datetime.min.time()), 1_000_000.0],
                 )
+                mid = {"BTC": 50000.0, "ETH": 3000.0, "SOL": 100.0}[symbol]
+                ts = datetime.combine(day, datetime.min.time())
+                conn.execute(
+                    """
+                    insert into main.order_book_snapshots (
+                      symbol, timestamp, exchange, mid, best_bid, best_ask,
+                      spread_bps, bid_notional_bps_10, ask_notional_bps_10,
+                      bid_notional_bps_25, ask_notional_bps_25,
+                      bid_notional_bps_50, ask_notional_bps_50,
+                      imbalance_bps_25, depth_levels, last_update_id, fetched_at
+                    ) values (
+                      ?, ?, 'binance', ?, ?, ?, 2.0,
+                      1000.0, 1000.0, 5000.0, 5000.0, 10000.0, 10000.0,
+                      0.0, 20, 1, ?
+                    )
+                    """,
+                    [symbol, ts, mid, mid * 0.9999, mid * 1.0001, ts],
+                )
+                conn.execute(
+                    """
+                    insert into main.dex_price_daily (
+                      symbol, date, venue, price_usd, source
+                    ) values (?, ?, 'defillama', ?, 'defillama')
+                    """,
+                    [symbol, day, mid * 0.999],
+                )
+            conn.execute(
+                """
+                insert into main.mev_boost_payloads (
+                  slot, block_number, builder_pubkey, proposer_fee_recipient,
+                  value_wei, value_eth, relay, date, source
+                ) values (?, ?, '0xbuilder', '0xfee', 1e18, 1.0,
+                  'flashbots', ?, 'mevboost-data')
+                """,
+                [9_000_000 + (today - day).days, 20_000_000, day],
+            )
             conn.execute(
                 """
                 insert into main.onchain_series (metric, date, value, source) values

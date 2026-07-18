@@ -14,6 +14,9 @@ pricing tiers, free-tier limits, key setup, and a recommended v1 stack.
 | Source | Role | Free? | Key required? | V1 recommendation |
 |---|---|---|---|---|
 | **Binance** | OHLCV candles (price/volume) | Free, keyless | No | **Use** (ccquant sync) |
+| **Binance / Bybit / OKX** | Order-book depth snapshots | Free, keyless | No | **Use** (`sync depth`) |
+| **DefiLlama coins** | DEX/oracle USD prices (CEX–DEX basis) | Free, keyless | No | **Use** (`sync mev`) |
+| **MEV-Boost parquet** | ETH PBS block-value context | Free dumps | No | **Use** (`import mev-boost`) |
 | **Coinbase** | OHLCV candles (fallback) | Free, keyless | No | **Use** (ccquant sync) |
 | **CoinGecko** | Universe ranking + OHLCV fallback | Free Demo (10k calls/mo) | Demo key (free) | **Use** (ccquant sync) |
 | **FRED** | Macro indicators (M2, rates, Fed BS) | Free | `FRED_API_KEY` | **Use** (Macro / btc notebooks) |
@@ -56,6 +59,36 @@ Used by `ccquant sync backfill` as the primary OHLCV source.
 - **Endpoints:** `/api/v3/klines` (daily/hourly candles).
 - **Notes:** Weight-based rate limiting; klines cost 1-2 weight each. No key
   needed. Already wired in `src/ccquant/sources.py`.
+
+---
+
+### Binance / Bybit / OKX — Order-book depth
+
+Used by `ccquant sync depth` to self-record live L2 snapshots as bps-band
+volume features (mid, spread, bid/ask notional within 10/25/50 bps).
+
+| Venue | Endpoint | Free? | History |
+|---|---|---|---|
+| Binance spot | `/api/v3/depth?limit=100` (weight 5) | Yes, keyless | **Live only** |
+| Bybit spot | `/v5/market/orderbook?category=spot` | Yes, keyless | **Live only** |
+| OKX spot | `/api/v5/market/books` | Yes, keyless (~20 req/2s) | **Live only** |
+
+- **Config toggles:** `order_book.binance` / `bybit` / `okx` (mirror OI).
+- **Caveat:** No free multi-year L2 archive — history starts when you poll.
+- **dbt:** `fct_order_book_snapshots`, `fct_order_book_agg` (tag `market`).
+
+---
+
+### DefiLlama coins + MEV-Boost — MEV / arb context
+
+| Source | Role | Free? | Notes |
+|---|---|---|---|
+| DefiLlama `coins.llama.fi` | DEX/oracle USD prices | Yes, keyless | `sync mev` → `dex_price_daily` |
+| MEV-Boost parquet dumps | ETH PBS winning bids | Yes (local files) | `import mev-boost --source DIR` |
+
+- **dbt:** `fct_cex_dex_basis`, `mart_mev_arb_daily` (tag `mev`).
+- **Caveat:** MEV-Boost totals on the daily mart are **date-global** (ETH PBS),
+  not per-symbol MEV. Not joined into `mart_signals_daily`.
 
 ---
 
