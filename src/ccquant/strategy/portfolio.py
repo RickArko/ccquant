@@ -113,13 +113,14 @@ def build_directional_weights(
     if short_z > long_z:
         short_z, long_z = long_z, short_z
 
+    short_sleeve = -1.0 if port.allow_short else 0.0
     eligible = out.with_columns(
         pl.when(~pl.col("is_rebalance"))
         .then(None)
         .when(pl.col("regime_score") >= long_z)
         .then(1.0)
         .when(pl.col("regime_score") <= short_z)
-        .then(-1.0)
+        .then(short_sleeve)
         .otherwise(0.0)
         .alias("sleeve")
     )
@@ -141,9 +142,9 @@ def build_directional_weights(
 
 
 def build_cross_section_weights(
-    df: pl.DataFrame, config: StrategyConfig
+    df: pl.DataFrame, config: StrategyConfig, *, long_only: bool = False
 ) -> pl.DataFrame:
-    """Dollar-neutral CS long/short from ``alpha_score`` quintiles."""
+    """CS portfolio from ``alpha_score`` quintiles (L/S or long-only)."""
     port = config.portfolio
     out = limit_universe(df, config.universe).sort(["date", "symbol"])
     out = out.with_columns(
@@ -174,29 +175,47 @@ def build_cross_section_weights(
     long_cut = 1.0 - 1.0 / n_q
     short_cut = 1.0 / n_q
 
-    eligible = eligible.with_columns(
-        pl.when(~pl.col("regime_active").fill_null(True))
-        .then(0.0)
-        .when(pl.col("cs_rank") >= long_cut)
-        .then(1.0)
-        .when(pl.col("cs_rank") <= short_cut)
-        .then(-1.0)
-        .otherwise(0.0)
-        .alias("sleeve")
-    )
-
-    counts = eligible.group_by("date").agg(
-        pl.col("sleeve").eq(1.0).sum().alias("n_long"),
-        pl.col("sleeve").eq(-1.0).sum().alias("n_short"),
-    )
-    eligible = eligible.join(counts, on="date", how="left").with_columns(
-        pl.when(pl.col("sleeve") == 1.0)
-        .then(0.5 / pl.col("n_long").clip(lower_bound=1))
-        .when(pl.col("sleeve") == -1.0)
-        .then(-0.5 / pl.col("n_short").clip(lower_bound=1))
-        .otherwise(0.0)
-        .alias("w_raw")
-    )
+    if long_only:
+        eligible = eligible.with_columns(
+            pl.when(~pl.col("regime_active").fill_null(True))
+            .then(0.0)
+            .when(pl.col("cs_rank") >= long_cut)
+            .then(1.0)
+            .otherwise(0.0)
+            .alias("sleeve")
+        )
+        counts = eligible.group_by("date").agg(
+            pl.col("sleeve").eq(1.0).sum().alias("n_long"),
+        )
+        eligible = eligible.join(counts, on="date", how="left").with_columns(
+            pl.when(pl.col("sleeve") == 1.0)
+            .then(1.0 / pl.col("n_long").clip(lower_bound=1))
+            .otherwise(0.0)
+            .alias("w_raw")
+        )
+    else:
+        eligible = eligible.with_columns(
+            pl.when(~pl.col("regime_active").fill_null(True))
+            .then(0.0)
+            .when(pl.col("cs_rank") >= long_cut)
+            .then(1.0)
+            .when(pl.col("cs_rank") <= short_cut)
+            .then(-1.0)
+            .otherwise(0.0)
+            .alias("sleeve")
+        )
+        counts = eligible.group_by("date").agg(
+            pl.col("sleeve").eq(1.0).sum().alias("n_long"),
+            pl.col("sleeve").eq(-1.0).sum().alias("n_short"),
+        )
+        eligible = eligible.join(counts, on="date", how="left").with_columns(
+            pl.when(pl.col("sleeve") == 1.0)
+            .then(0.5 / pl.col("n_long").clip(lower_bound=1))
+            .when(pl.col("sleeve") == -1.0)
+            .then(-0.5 / pl.col("n_short").clip(lower_bound=1))
+            .otherwise(0.0)
+            .alias("w_raw")
+        )
 
     eligible = _apply_vol_scale(eligible, config)
     eligible = eligible.with_columns(
@@ -211,11 +230,30 @@ def build_cross_section_weights(
     )
 
 
+def build_ts_mom_weights(df: pl.DataFrame, config: StrategyConfig) -> pl.DataFrame:
+    """BTC (or single-name) dual-momentum directional weights from regime_score."""
+    # Reuse directional bands: ts_mom features set regime_score ∈ {-1,0,+1}.
+    cfg = config
+    if config.regime.long_z != 0.5 or config.regime.short_z != -0.5:
+        from dataclasses import replace
+
+        cfg = replace(
+            config,
+            regime=replace(config.regime, long_z=0.5, short_z=-0.5),
+        )
+    return build_directional_weights(df, cfg)
+
+
 def build_target_weights(df: pl.DataFrame, config: StrategyConfig) -> pl.DataFrame:
-    """Dispatch to cross-sectional or directional portfolio construction."""
-    if config.portfolio.mode == "directional":
+    """Dispatch to CS / long-only / directional / ts_mom construction."""
+    mode = config.portfolio.mode
+    if mode == "directional":
         return build_directional_weights(df, config)
-    return build_cross_section_weights(df, config)
+    if mode == "ts_mom":
+        return build_ts_mom_weights(df, config)
+    if mode == "long_only":
+        return build_cross_section_weights(df, config, long_only=True)
+    return build_cross_section_weights(df, config, long_only=False)
 
 
 def dollar_neutral_check(weights: pl.Series, tol: float = 1e-6) -> bool:

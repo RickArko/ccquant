@@ -45,8 +45,10 @@ class PortfolioSpec:
     min_adv_usd: float = 1_000_000.0
     rebalance: str = "weekly"
     adv_window: int = 20
-    # ``cross_section`` = CS L/S; ``directional`` = single-name macro long/short/flat.
+    # cross_section | long_only | directional | ts_mom
     mode: str = "cross_section"
+    # When False, directional/ts_mom never goes short (flat instead).
+    allow_short: bool = True
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,8 @@ class FeatureSpec:
     volume_z_window: int = 20
     oi_change_window: int = 20
     macro_lag_days: int = 1
+    # Rank CS mom on (asset ret − BTC ret) windows when True.
+    residualize_vs_btc: bool = False
 
 
 @dataclass(frozen=True)
@@ -166,6 +170,7 @@ def load_strategy_config(path: str | Path) -> StrategyConfig:
             rebalance=str(port.get("rebalance", "weekly")),
             adv_window=int(port.get("adv_window", 20)),
             mode=str(port.get("mode", "cross_section")).lower(),
+            allow_short=bool(port.get("allow_short", True)),
         ),
         regime=RegimeSpec(
             lag_days=int(regime.get("lag_days", features.get("macro_lag_days", 1))),
@@ -185,6 +190,7 @@ def load_strategy_config(path: str | Path) -> StrategyConfig:
             volume_z_window=int(features.get("volume_z_window", 20)),
             oi_change_window=int(features.get("oi_change_window", 20)),
             macro_lag_days=int(features.get("macro_lag_days", 1)),
+            residualize_vs_btc=bool(features.get("residualize_vs_btc", False)),
         ),
         gates=GateSpec(
             min_net_sharpe=float(gates.get("min_net_sharpe", 0.0)),

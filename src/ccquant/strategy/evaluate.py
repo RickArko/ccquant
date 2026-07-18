@@ -124,10 +124,20 @@ def hit_rate(returns: pl.Series) -> float:
 
 
 def information_ratio(strategy: pl.Series, benchmark: pl.Series) -> float:
+    """Sharpe of active returns vs a **vol-matched** benchmark.
+
+    Vol-targeted books (~10% ann) cannot be compared to raw crypto EW (~50–80%
+    ann) without scaling; otherwise IR collapses to ≈ −Sharpe(EW).
+    """
     aligned = pl.DataFrame({"s": strategy, "b": benchmark}).drop_nulls()
     if aligned.height < 2:
         return float("nan")
-    active = aligned["s"] - aligned["b"]
+    s_vol = _f(aligned["s"].std())
+    b_vol = _f(aligned["b"].std())
+    if b_vol < 1e-15 or s_vol != s_vol:
+        return float("nan")
+    scale = s_vol / b_vol
+    active = aligned["s"] - aligned["b"] * scale
     return sharpe_ratio(active)
 
 

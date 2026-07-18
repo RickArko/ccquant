@@ -54,7 +54,7 @@ Every strategy must fill these stages (see YAML under `config/strategies/`):
 Reported on each OOS fold and pooled OOS:
 
 - **Sharpe** / **Sortino** (annualized, √365 on daily crypto bars)
-- **IR** vs equal-weight universe
+- **IR** vs equal-weight universe (EW vol-matched to strategy realized vol)
 - **Max drawdown**, **Calmar**
 - **Hit-rate** (fraction of positive daily net returns)
 - **Turnover** (average one-way weight change per rebalance)

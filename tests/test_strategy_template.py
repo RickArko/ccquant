@@ -366,6 +366,67 @@ def test_regime_disabled_always_active() -> None:
     assert bool(feat["regime_active"].all())
 
 
+def test_load_ladder_yamls() -> None:
+    for name, mode in (
+        ("cs_mom_long_only", "long_only"),
+        ("cs_mom_btc_neutral", "cross_section"),
+        ("btc_ts_mom", "ts_mom"),
+        ("btc_macro_long_only", "directional"),
+    ):
+        cfg = load_strategy_config(Path(f"config/strategies/{name}.yaml"))
+        assert cfg.name == name
+        assert cfg.portfolio.mode == mode
+    neutral = load_strategy_config(Path("config/strategies/cs_mom_btc_neutral.yaml"))
+    assert neutral.features.residualize_vs_btc is True
+    macro_lo = load_strategy_config(Path("config/strategies/btc_macro_long_only.yaml"))
+    assert macro_lo.portfolio.allow_short is False
+
+
+def test_long_only_weights_non_negative() -> None:
+    panel = make_synthetic_panel(n_days=200)
+    cfg = load_strategy_config(Path("config/strategies/cs_mom_long_only.yaml"))
+    cfg = StrategyConfig(
+        hypothesis=cfg.hypothesis,
+        label=cfg.label,
+        cost=cfg.cost,
+        walk_forward=WalkForwardSpec(
+            train_days=60, test_days=30, step_days=30, embargo_days=5
+        ),
+        portfolio=PortfolioSpec(
+            mode="long_only",
+            n_quantiles=5,
+            vol_target_ann=0.10,
+            min_adv_usd=1_000.0,
+            rebalance="weekly",
+            adv_window=20,
+            allow_short=False,
+        ),
+        regime=cfg.regime,
+        universe=UniverseSpec(top_n=10),
+        features=cfg.features,
+        gates=GateSpec(min_net_sharpe=-1e9, min_ir=-1e9),
+        target_notional_usd=1_000.0,
+        max_participation=0.5,
+        panel="daily",
+    )
+    prepared = prepare_panel(panel, cfg)
+    assert float(prepared["weight"].min()) >= -1e-12
+    assert float(prepared["weight"].abs().sum()) > 0
+
+
+def test_vol_matched_ir_finite() -> None:
+    from ccquant.strategy.evaluate import information_ratio
+
+    s = pl.Series("s", [0.001, -0.001, 0.002, 0.0, -0.002, 0.0015] * 20)
+    # Imperfectly correlated higher-vol benchmark (not a pure scale of s).
+    b = pl.Series(
+        "b",
+        [0.01, -0.005, 0.02, 0.001, -0.015, 0.008] * 20,
+    )
+    ir = information_ratio(s, b)
+    assert math.isfinite(ir)
+
+
 def test_load_btc_macro_ls_yaml() -> None:
     cfg = load_strategy_config(Path("config/strategies/btc_macro_ls.yaml"))
     assert cfg.name == "btc_macro_ls"

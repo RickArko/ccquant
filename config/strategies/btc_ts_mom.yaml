@@ -1,0 +1,64 @@
+# Bitcoin dual time-series momentum (long / flat / short).
+name: btc_ts_mom
+panel: daily
+
+hypothesis:
+  name: btc_ts_mom
+  story: >
+    Go long BTC when both 20d and 60d momentum are positive, short when both
+    are negative, otherwise flat. Classic time-series momentum timing.
+  horizon_days: 20
+  failure_modes:
+    - whipsaw in sideways markets
+    - momentum crashes after crowded trend
+    - regime shifts (ETF / halving) not captured by price mom
+
+label:
+  horizons: [5, 20]
+  primary_horizon: 20
+
+cost:
+  fee_bps_rt: 10.0
+  slippage_coef: 0.05
+
+walk_forward:
+  train_days: 504
+  test_days: 126
+  step_days: 126
+  embargo_days: 20
+
+portfolio:
+  mode: ts_mom
+  n_quantiles: 5
+  vol_target_ann: 0.10
+  min_adv_usd: 0
+  rebalance: weekly
+  adv_window: 20
+  allow_short: true
+
+regime:
+  disabled: true
+  lag_days: 1
+  long_z: 0.5
+  short_z: -0.5
+  risk_off_z: -1.0e9
+  z_window: 60
+
+universe:
+  top_n: 1
+  symbols: [BTC]
+
+features:
+  mom_windows: [20, 60]
+  vol_window: 20
+  volume_z_window: 20
+  oi_change_window: 20
+  macro_lag_days: 1
+  residualize_vs_btc: false
+
+gates:
+  min_net_sharpe: 0.0
+  min_ir: 0.0
+
+target_notional_usd: 1000000
+max_participation: 0.01

@@ -51,12 +51,31 @@ def add_price_features(df: pl.DataFrame, spec: FeatureSpec) -> pl.DataFrame:
     out = df.sort(["symbol", "date"]).with_columns(
         pl.col("close").pct_change().over("symbol").alias("ret_1d"),
     )
-    for w in spec.mom_windows:
-        out = out.with_columns(
-            (pl.col("close") / pl.col("close").shift(w).over("symbol") - 1.0).alias(
-                f"mom_{w}d"
+    if spec.residualize_vs_btc and "symbol" in out.columns:
+        btc = (
+            out.filter(pl.col("symbol") == "BTC")
+            .select(["date", pl.col("ret_1d").alias("btc_ret_1d")])
+            .unique(subset=["date"])
+        )
+        out = out.join(btc, on="date", how="left").with_columns(
+            (pl.col("ret_1d") - pl.col("btc_ret_1d").fill_null(0.0)).alias(
+                "resid_ret_1d"
             )
         )
+        for w in spec.mom_windows:
+            out = out.with_columns(
+                pl.col("resid_ret_1d")
+                .rolling_sum(w)
+                .over("symbol")
+                .alias(f"mom_{w}d")
+            )
+    else:
+        for w in spec.mom_windows:
+            out = out.with_columns(
+                (
+                    pl.col("close") / pl.col("close").shift(w).over("symbol") - 1.0
+                ).alias(f"mom_{w}d")
+            )
     out = out.with_columns(
         pl.col("ret_1d")
         .rolling_std(spec.vol_window)
@@ -207,8 +226,30 @@ def build_features(df: pl.DataFrame, config: StrategyConfig) -> pl.DataFrame:
         raise ValueError(f"panel missing required columns: {sorted(missing)}")
     out = add_price_features(df, config.features)
     out = add_macro_regime(out, config.regime)
-    # Directional macro timing (or empty mom windows): score = regime composite.
-    if config.portfolio.mode == "directional" or not config.features.mom_windows:
+    mode = config.portfolio.mode
+    if mode == "ts_mom":
+        # Dual lookback sign agreement → directional score in {-1, 0, +1}.
+        m20 = "mom_20d" if "mom_20d" in out.columns else None
+        m60 = "mom_60d" if "mom_60d" in out.columns else None
+        if m20 and m60:
+            out = out.with_columns(
+                pl.when((pl.col(m20) > 0) & (pl.col(m60) > 0))
+                .then(1.0)
+                .when((pl.col(m20) < 0) & (pl.col(m60) < 0))
+                .then(-1.0)
+                .otherwise(0.0)
+                .alias("regime_score"),
+                pl.lit(True).alias("regime_active"),
+            )
+            out = out.with_columns(pl.col("regime_score").alias("alpha_score"))
+        else:
+            out = out.with_columns(
+                pl.lit(0.0).alias("regime_score"),
+                pl.lit(True).alias("regime_active"),
+                pl.lit(0.0).alias("alpha_score"),
+            )
+    elif mode == "directional" or not config.features.mom_windows:
+        # Directional macro timing (or empty mom windows): score = regime.
         out = out.with_columns(
             pl.col("regime_score").fill_null(0.0).fill_nan(0.0).alias("alpha_score")
         )
