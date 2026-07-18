@@ -63,11 +63,18 @@ def monthly_mom(
 
     out = (
         df.sort(date_col)
-        .with_columns(pl.col(date_col).cast(pl.Date).dt.truncate("1mo").alias(month_col))
+        .with_columns(
+            pl.col(date_col)
+            .cast(pl.Date)
+            .dt.truncate("1mo")
+            .alias(month_col)
+        )
         .group_by(month_col)
         .agg(agg_expr)
         .sort(month_col)
-        .with_columns(pl.col(value_col).pct_change().alias(f"{value_col}_mom"))
+        .with_columns(
+            pl.col(value_col).pct_change().alias(f"{value_col}_mom")
+        )
     )
     return mark_partial_months(out, month_col=month_col, as_of=as_of)
 
@@ -181,11 +188,18 @@ def ohlcv_price_mom(
     as_of = as_of or date.today()
     out = (
         frame.sort([symbol_col, date_col])
-        .with_columns(pl.col(date_col).cast(pl.Date).dt.truncate("1mo").alias("month"))
+        .with_columns(
+            pl.col(date_col).cast(pl.Date).dt.truncate("1mo").alias("month")
+        )
         .group_by(["month", symbol_col])
         .agg(pl.col(price_col).last().alias(price_col))
         .sort([symbol_col, "month"])
-        .with_columns(pl.col(price_col).pct_change().over(symbol_col).alias(f"{price_col}_mom"))
+        .with_columns(
+            pl.col(price_col)
+            .pct_change()
+            .over(symbol_col)
+            .alias(f"{price_col}_mom")
+        )
     )
     return mark_partial_months(out, as_of=as_of)
 
@@ -223,11 +237,18 @@ def market_mom(
         vol_monthly = (
             panel.sort(date_col)
             .unique(subset=[symbol_col, date_col], keep="last")
-            .with_columns(pl.col(date_col).cast(pl.Date).dt.truncate("1mo").alias("month"))
+            .with_columns(
+                pl.col(date_col)
+                .cast(pl.Date)
+                .dt.truncate("1mo")
+                .alias("month")
+            )
             .group_by(["month", symbol_col])
             .agg(pl.col(volume_col).sum().alias(volume_col))
             .sort([symbol_col, "month"])
-            .with_columns(pl.col(volume_col).shift(1).over(symbol_col).alias("_w"))
+            .with_columns(
+                pl.col(volume_col).shift(1).over(symbol_col).alias("_w")
+            )
         )
         price = price.join(vol_monthly, on=["month", symbol_col], how="left")
 

@@ -313,6 +313,61 @@ def test_import_mev_boost_parquet(tmp_path) -> None:
         store.close()
 
 
+def test_import_mev_boost_parquet_value_gwei(tmp_path) -> None:
+    store = MarketStore(tmp_path / "ccquant.duckdb")
+    try:
+        parquet_dir = tmp_path / "mevboost_gwei"
+        parquet_dir.mkdir()
+        # 2e9 gwei == 2 ETH
+        store.connection.execute(
+            f"""
+            copy (
+              select
+                9000002::bigint as slot,
+                2e9::double as value_gwei,
+                date '2026-07-01' as date
+            ) to '{parquet_dir / "day.parquet"}' (format parquet)
+            """
+        )
+        assert store.import_mev_boost_parquet(parquet_dir) == 1
+        row = store.connection.execute(
+            "select value_eth, value_wei from mev_boost_payloads"
+            " where slot=9000002"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == 2.0
+        assert row[1] == 2e18
+    finally:
+        store.close()
+
+
+def test_import_mev_boost_parquet_path_with_quote(tmp_path) -> None:
+    store = MarketStore(tmp_path / "ccquant.duckdb")
+    try:
+        parquet_dir = tmp_path / "mev'boost"
+        parquet_dir.mkdir()
+        out = parquet_dir / "day.parquet"
+        # Escape for DuckDB COPY target string.
+        escaped_out = out.as_posix().replace("'", "''")
+        store.connection.execute(
+            f"""
+            copy (
+              select
+                9000003::bigint as slot,
+                1e18::double as value_wei,
+                date '2026-07-01' as date
+            ) to '{escaped_out}' (format parquet)
+            """
+        )
+        assert store.import_mev_boost_parquet(parquet_dir) == 1
+        row = store.connection.execute(
+            "select value_eth from mev_boost_payloads where slot=9000003"
+        ).fetchone()
+        assert row is not None and row[0] == 1.0
+    finally:
+        store.close()
+
+
 def test_upsert_macro_series_is_idempotent(tmp_path) -> None:
     store = MarketStore(tmp_path / "ccquant.duckdb")
     try:

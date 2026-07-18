@@ -812,14 +812,21 @@ class MarketStore:
         """Load MEV-Boost winning-bid parquet files into ``mev_boost_payloads``.
 
         Accepts a directory of ``*.parquet`` or a single parquet file path.
-        Expects at least ``slot`` and ``value`` (wei or ETH) columns; other
-        fields are optional.
+        Expects at least ``slot`` and a value column (``value`` / ``value_wei`` /
+        ``value_gwei`` / ``bid_value``); other fields are optional.
         """
         path = Path(source)
-        pattern = str(path / "*.parquet") if path.is_dir() else str(path)
+        pattern = (
+            (path / "*.parquet").as_posix()
+            if path.is_dir()
+            else path.as_posix()
+        )
+        # Match migrate_onchain: escape single quotes before interpolating.
+        escaped_pattern = pattern.replace("'", "''")
+        escaped_relay = relay.replace("'", "''")
         try:
             col_rows = self._conn.execute(
-                f"describe select * from read_parquet('{pattern}', "
+                f"describe select * from read_parquet('{escaped_pattern}', "
                 f"union_by_name=true)"
             ).fetchall()
         except duckdb.Error:
@@ -833,8 +840,15 @@ class MarketStore:
             return None
 
         slot_c = pick("slot")
-        value_c = pick("value", "value_wei", "bid_value", "value_gwei")
-        if slot_c is None or value_c is None:
+        # Prefer explicit unit columns before ambiguous ``value``.
+        value_key: str | None = None
+        value_c: str | None = None
+        for key in ("value_wei", "value_gwei", "value", "bid_value"):
+            if key in available:
+                value_key = key
+                value_c = available[key]
+                break
+        if slot_c is None or value_c is None or value_key is None:
             return 0
         block_c = pick("block_number", "block_num", "block")
         builder_c = pick("builder_pubkey", "builder")
@@ -865,7 +879,7 @@ class MarketStore:
             (
                 f"cast({relay_c} as varchar) as relay"
                 if relay_c
-                else f"'{relay}' as relay"
+                else f"'{escaped_relay}' as relay"
             ),
             (
                 f"cast({date_c} as date) as date"
@@ -876,7 +890,7 @@ class MarketStore:
         rows = self._conn.execute(
             f"""
             select {", ".join(select_parts)}
-            from read_parquet('{pattern}', union_by_name=true)
+            from read_parquet('{escaped_pattern}', union_by_name=true)
             where {slot_c} is not null
             """
         ).fetchall()
@@ -891,7 +905,10 @@ class MarketStore:
             row_date,
         ) in rows:
             value = float(raw_value)
-            if value >= 1e9:
+            if value_key == "value_gwei":
+                value_wei = value * 1e9
+                value_eth = value / 1e9
+            elif value_key == "value_wei" or value >= 1e9:
                 value_wei = value
                 value_eth = value / 1e18
             else:
