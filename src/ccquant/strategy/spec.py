@@ -52,6 +52,7 @@ class RegimeSpec:
     lag_days: int = 1
     risk_off_z: float = -0.5
     z_window: int = 60
+    disabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,8 @@ class StrategyConfig:
     gates: GateSpec = field(default_factory=GateSpec)
     target_notional_usd: float = 1_000_000.0
     max_participation: float = 0.01
+    # ``signals`` = mart_signals_daily; ``daily`` = OHLCV-only (price mom).
+    panel: str = "signals"
 
     @property
     def name(self) -> str:
@@ -161,6 +164,7 @@ def load_strategy_config(path: str | Path) -> StrategyConfig:
             lag_days=int(regime.get("lag_days", features.get("macro_lag_days", 1))),
             risk_off_z=float(regime.get("risk_off_z", -0.5)),
             z_window=int(regime.get("z_window", 60)),
+            disabled=bool(regime.get("disabled", False)),
         ),
         universe=UniverseSpec(top_n=int(universe.get("top_n", 50))),
         features=FeatureSpec(
@@ -176,6 +180,7 @@ def load_strategy_config(path: str | Path) -> StrategyConfig:
         ),
         target_notional_usd=float(raw.get("target_notional_usd", 1_000_000.0)),
         max_participation=float(raw.get("max_participation", 0.01)),
+        panel=str(raw.get("panel", "signals")).lower(),
     )
 
 

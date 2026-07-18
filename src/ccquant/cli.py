@@ -939,15 +939,27 @@ def research_run(
         raise typer.BadParameter(f"strategy config not found: {strat_cfg_path}")
 
     write_dir = None if no_write else (out or Path("data/research"))
+    strat = load_strategy_config(strat_cfg_path)
     result = run_strategy_detailed(
         database=cfg.database,
         config_path=strat_cfg_path,
+        config=strat,
         write_dir=write_dir,
     )
     report = result.report
-    strat = load_strategy_config(strat_cfg_path)
     console.print(f"[bold]{report.strategy_name}[/bold]  hash={report.config_hash}")
-    console.print(f"data_max_date={report.data_max_date}  symbols={report.n_symbols}")
+    console.print(
+        f"panel={strat.panel}  "
+        f"history={report.data_min_date} -> {report.data_max_date}  "
+        f"({report.n_calendar_days} calendar days)  "
+        f"symbols={report.n_symbols}  folds={report.n_folds}"
+    )
+    if report.n_calendar_days < 365:
+        console.print(
+            "[yellow]WARNING: panel history < 365 days — not a multi-year test. "
+            "Run: uv run ccquant sync backfill --interval 1d --full --force "
+            "--top 50[/yellow]"
+        )
     metrics = report.oos_metrics
     table = Table(title="OOS metrics")
     table.add_column("metric")

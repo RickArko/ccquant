@@ -43,9 +43,20 @@ def apply_costs(
 
     fee_rate = cost.fee_bps_rt / 10_000.0
     # Per-name slippage proxy; ADV in USD.
-    adv = pl.col("adv_usd").fill_null(1.0).clip(lower_bound=1.0)
-    participation = (pl.col("dw").abs() * target_notional) / adv
-    slip = cost.slippage_coef * pl.col("dw").abs() * participation.sqrt()
+    # Never fall back to ADV=1 (explodes participation/slippage). Missing or
+    # sub-threshold ADV → fee-only for that name (zero slippage).
+    min_adv_for_slip = 1_000.0
+    if "adv_usd" in out.columns:
+        adv = pl.col("adv_usd")
+    else:
+        adv = pl.lit(None).cast(pl.Float64)
+    adv_ok = adv.is_not_null() & (adv >= min_adv_for_slip)
+    participation = pl.when(adv_ok).then(
+        (pl.col("dw").abs() * target_notional) / adv
+    ).otherwise(0.0)
+    slip = pl.when(adv_ok).then(
+        cost.slippage_coef * pl.col("dw").abs() * participation.sqrt()
+    ).otherwise(0.0)
 
     daily = (
         out.group_by("date")

@@ -86,10 +86,13 @@ external forecast pipelines.
 
 ## Strategy research
 
-Walk-forward, cost-aware strategy template over `mart_signals_daily`:
+Walk-forward, cost-aware strategy templates. For a **multi-year** momentum test,
+force a full daily backfill first (short panels are not multi-year):
 
 ```bash
-uv run ccquant research run --strategy cs_mom_oi_regime
+uv run ccquant sync backfill --interval 1d --full --force --top 50
+uv run dbt run --select fct_ohlcv_daily --full-refresh --project-dir dbt --profiles-dir dbt
+uv run ccquant research run --strategy cs_mom_simple
 ```
 
 See [`documentation/strategy_research.md`](documentation/strategy_research.md) and
@@ -166,10 +169,10 @@ regime turning points, and backtests forward BTC returns conditional on regime.
 
 <p align="center"><em>Global Liquidity Composite (z-scored M2 growth + Fed BS growth &minus; real rate change) vs BTC price. Crypto is a high-beta claim on liquidity.</em></p>
 
-### Strategy Template — Risk-Adjusted CS Alpha (`Strategy_Template.ipynb`)
+### Strategy Template — Multi-Year Momentum (`Strategy_Template.ipynb`)
 
-Walk-forward cross-sectional long/short template (`cs_mom_oi_regime`) over
-`mart_signals_daily`: PIT features, costs/capacity, purged folds, scale gates.
+Walk-forward CS long/short (`cs_mom_simple` by default) on the daily OHLCV panel:
+PIT features, costs/capacity, purged multi-year folds, scale gates.
 See [`documentation/strategy_research.md`](documentation/strategy_research.md).
 
 ### On-Chain BTC Direction Signals (`OnChain_BTC.ipynb`)

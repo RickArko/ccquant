@@ -115,6 +115,7 @@ def make_config(**overrides: object) -> StrategyConfig:
         gates=GateSpec(min_net_sharpe=-1e9, min_ir=-1e9),
         target_notional_usd=1_000.0,
         max_participation=0.5,
+        panel="signals",
     )
     if not overrides:
         return base
@@ -130,6 +131,7 @@ def make_config(**overrides: object) -> StrategyConfig:
         "gates": base.gates,
         "target_notional_usd": base.target_notional_usd,
         "max_participation": base.max_participation,
+        "panel": base.panel,
     }
     data.update(overrides)
     return StrategyConfig(**data)  # type: ignore[arg-type]
@@ -321,3 +323,80 @@ def test_compute_metrics_finite_on_noise() -> None:
     m = compute_metrics(daily)
     assert m["n_days"] == 60.0
     assert math.isfinite(m["net_sharpe"]) or math.isnan(m["net_sharpe"])
+
+
+def test_load_cs_mom_simple_yaml() -> None:
+    cfg = load_strategy_config(Path("config/strategies/cs_mom_simple.yaml"))
+    assert cfg.name == "cs_mom_simple"
+    assert cfg.panel == "daily"
+    assert cfg.regime.disabled is True
+    assert cfg.walk_forward.train_days == 504
+    assert cfg.universe.top_n == 30
+
+
+def test_null_adv_does_not_explode_slippage() -> None:
+    """Missing ADV must not use ADV=1 (would explode participation)."""
+    dates = _dates(5)
+    rows: list[dict[str, object]] = []
+    for d in dates:
+        for sym, w in (("AAA", 0.5), ("BBB", -0.5)):
+            rows.append(
+                {
+                    "symbol": sym,
+                    "date": d,
+                    "weight": w if d != dates[0] else 0.0,
+                    "ret_1d": 0.01,
+                    "adv_usd": None,
+                }
+            )
+    panel = pl.DataFrame(rows).with_columns(pl.col("date").cast(pl.Date))
+    # Second day: full rebalance from 0 → ±0.5 with null ADV.
+    daily = apply_costs(panel, CostModel(fee_bps_rt=10.0, slippage_coef=0.10))
+    assert float(daily["slippage"].max()) == pytest.approx(0.0)
+    # Fee still applies on turnover.
+    assert float(daily.filter(pl.col("turnover") > 0)["fee_cost"].max()) > 0
+
+
+def test_regime_disabled_always_active() -> None:
+    panel = make_synthetic_panel(n_days=80)
+    cfg = make_config(
+        regime=RegimeSpec(disabled=True, lag_days=1, risk_off_z=-0.5, z_window=60)
+    )
+    feat = build_features(panel, cfg)
+    assert bool(feat["regime_active"].all())
+
+
+def test_long_panel_multi_fold_cs_mom_simple() -> None:
+    """≥800-day synthetic panel with multi-year walk-forward yields multiple folds."""
+    panel = make_synthetic_panel(n_days=900)
+    # OHLCV-only columns (daily panel shape).
+    daily_like = panel.select(
+        ["symbol", "date", "open", "high", "low", "close", "volume"]
+    )
+    cfg = load_strategy_config(Path("config/strategies/cs_mom_simple.yaml"))
+    # Soften gates / ADV for synthetic scale.
+    cfg = StrategyConfig(
+        hypothesis=cfg.hypothesis,
+        label=cfg.label,
+        cost=cfg.cost,
+        walk_forward=cfg.walk_forward,
+        portfolio=PortfolioSpec(
+            n_quantiles=5,
+            vol_target_ann=0.10,
+            min_adv_usd=1_000.0,
+            rebalance="weekly",
+            adv_window=20,
+        ),
+        regime=cfg.regime,
+        universe=UniverseSpec(top_n=10),
+        features=cfg.features,
+        gates=GateSpec(min_net_sharpe=-1e9, min_ir=-1e9),
+        target_notional_usd=1_000.0,
+        max_participation=0.5,
+        panel="daily",
+    )
+    result = run_strategy_detailed(panel=daily_like, config=cfg)
+    assert result.report.n_calendar_days >= 800
+    assert result.report.n_folds >= 2
+    assert "net_sharpe" in result.report.oos_metrics
+    assert result.daily.height > 0

@@ -29,6 +29,8 @@ class StrategyReport:
     config_hash: str
     data_max_date: str | None
     passed: bool
+    data_min_date: str | None = None
+    n_calendar_days: int = 0
     oos_metrics: dict[str, float] = field(default_factory=dict)
     fold_metrics: tuple[dict[str, float], ...] = ()
     capacity_usd: float = 0.0
@@ -36,6 +38,7 @@ class StrategyReport:
     gate_reasons: tuple[str, ...] = ()
     n_symbols: int = 0
     n_days: int = 0
+    n_folds: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         result = _json_safe(asdict(self))

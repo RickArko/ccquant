@@ -96,7 +96,15 @@ def add_macro_regime(df: pl.DataFrame, regime: RegimeSpec) -> pl.DataFrame:
 
     Composite ≈ z(M2 growth) + z(WALCL growth) − z(real-rate Δ).
     Values are identical across symbols for a given date (mart caveat).
+    When ``regime.disabled`` is True (or ``risk_off_z`` is a deep sentinel),
+    the book stays always-on and macro columns are not required.
     """
+    if regime.disabled or regime.risk_off_z <= -1.0e8:
+        return df.with_columns(
+            pl.lit(0.0).alias("regime_score"),
+            pl.lit(True).alias("regime_active"),
+        )
+
     lag = max(1, regime.lag_days)
     # Collapse to date-level macro so lag is calendar-clean, then join back.
     macro_cols = [c for c in ("m2sl", "walcl", "dgs10", "t10yie") if c in df.columns]

@@ -16,10 +16,18 @@ from ccquant.strategy.portfolio import (
     gross_exposure,
 )
 from ccquant.strategy.report import StrategyReport, apply_gates
-from ccquant.strategy.run import StrategyRun, run_strategy, run_strategy_detailed
+from ccquant.strategy.run import (
+    PanelHistory,
+    StrategyRun,
+    load_strategy_panel,
+    panel_history,
+    run_strategy,
+    run_strategy_detailed,
+)
 from ccquant.strategy.spec import StrategyConfig, load_strategy_config
 
 __all__ = [
+    "PanelHistory",
     "StrategyConfig",
     "StrategyReport",
     "StrategyRun",
@@ -36,6 +44,8 @@ __all__ = [
     "gross_exposure",
     "lag_columns",
     "load_strategy_config",
+    "load_strategy_panel",
+    "panel_history",
     "prepare_panel",
     "purged_folds",
     "run_strategy",
