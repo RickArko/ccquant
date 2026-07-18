@@ -45,6 +45,8 @@ class PortfolioSpec:
     min_adv_usd: float = 1_000_000.0
     rebalance: str = "weekly"
     adv_window: int = 20
+    # ``cross_section`` = CS L/S; ``directional`` = single-name macro long/short/flat.
+    mode: str = "cross_section"
 
 
 @dataclass(frozen=True)
@@ -53,11 +55,15 @@ class RegimeSpec:
     risk_off_z: float = -0.5
     z_window: int = 60
     disabled: bool = False
+    # Directional ternary bands (used when portfolio.mode == directional).
+    long_z: float = 0.25
+    short_z: float = -0.25
 
 
 @dataclass(frozen=True)
 class UniverseSpec:
     top_n: int = 50
+    symbols: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -159,14 +165,20 @@ def load_strategy_config(path: str | Path) -> StrategyConfig:
             min_adv_usd=float(port.get("min_adv_usd", 1_000_000.0)),
             rebalance=str(port.get("rebalance", "weekly")),
             adv_window=int(port.get("adv_window", 20)),
+            mode=str(port.get("mode", "cross_section")).lower(),
         ),
         regime=RegimeSpec(
             lag_days=int(regime.get("lag_days", features.get("macro_lag_days", 1))),
             risk_off_z=float(regime.get("risk_off_z", -0.5)),
             z_window=int(regime.get("z_window", 60)),
             disabled=bool(regime.get("disabled", False)),
+            long_z=float(regime.get("long_z", 0.25)),
+            short_z=float(regime.get("short_z", -0.25)),
         ),
-        universe=UniverseSpec(top_n=int(universe.get("top_n", 50))),
+        universe=UniverseSpec(
+            top_n=int(universe.get("top_n", 50)),
+            symbols=_as_tuple_str(universe.get("symbols")),
+        ),
         features=FeatureSpec(
             mom_windows=_as_tuple_int(features.get("mom_windows"), (20, 60)),
             vol_window=int(features.get("vol_window", 20)),

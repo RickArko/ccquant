@@ -11,14 +11,17 @@ from ccquant.strategy.evaluate import (
 from ccquant.strategy.features import build_features, lag_columns
 from ccquant.strategy.labels import build_labels
 from ccquant.strategy.portfolio import (
+    build_directional_weights,
     build_target_weights,
     dollar_neutral_check,
+    filter_symbols,
     gross_exposure,
 )
 from ccquant.strategy.report import StrategyReport, apply_gates
 from ccquant.strategy.run import (
     PanelHistory,
     StrategyRun,
+    load_btc_macro_panel,
     load_strategy_panel,
     panel_history,
     run_strategy,
@@ -33,6 +36,7 @@ __all__ = [
     "StrategyRun",
     "apply_costs",
     "apply_gates",
+    "build_directional_weights",
     "build_features",
     "build_labels",
     "build_target_weights",
@@ -40,9 +44,11 @@ __all__ = [
     "dollar_neutral_check",
     "estimate_capacity_usd",
     "evaluate_strategy",
+    "filter_symbols",
     "folds_respect_embargo",
     "gross_exposure",
     "lag_columns",
+    "load_btc_macro_panel",
     "load_strategy_config",
     "load_strategy_panel",
     "panel_history",

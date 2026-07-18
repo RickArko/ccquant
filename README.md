@@ -93,6 +93,7 @@ force a full daily backfill first (short panels are not multi-year):
 uv run ccquant sync backfill --interval 1d --full --force --top 50
 uv run dbt run --select fct_ohlcv_daily --full-refresh --project-dir dbt --profiles-dir dbt
 uv run ccquant research run --strategy cs_mom_simple
+uv run ccquant research run --strategy btc_macro_ls   # BTC-only macro long/short
 ```
 
 See [`documentation/strategy_research.md`](documentation/strategy_research.md) and

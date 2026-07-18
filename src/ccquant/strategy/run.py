@@ -6,10 +6,12 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+import duckdb
 import polars as pl
 
 from ccquant.forecasting import load_daily_panel, load_signals_panel
 from ccquant.strategy.evaluate import evaluate_strategy
+from ccquant.strategy.portfolio import filter_symbols
 from ccquant.strategy.report import StrategyReport, apply_gates
 from ccquant.strategy.spec import (
     StrategyConfig,
@@ -59,14 +61,58 @@ def panel_history(panel: pl.DataFrame) -> PanelHistory:
     )
 
 
+def load_btc_macro_panel(database: str | Path) -> pl.DataFrame:
+    """BTC daily OHLCV joined to wide FRED macro (forward-filled onto trading days).
+
+    Uses ``main_signals.fct_macro_series`` when present so multi-year timing does
+    not depend on the short ``mart_signals_daily`` incremental window.
+    """
+    daily = load_daily_panel(database).filter(pl.col("symbol") == "BTC")
+    if daily.height == 0:
+        return daily
+    path = str(database)
+    with duckdb.connect(path, read_only=True) as conn:
+        exists = conn.execute(
+            "select count(*) from information_schema.tables "
+            "where table_schema = 'main_signals' and table_name = 'fct_macro_series'"
+        ).fetchone()
+        if not exists or not exists[0]:
+            return daily
+        macro = pl.from_arrow(
+            conn.execute(
+                """
+                select *
+                from main_signals.fct_macro_series
+                order by date
+                """
+            ).to_arrow_table()
+        )
+    if not isinstance(macro, pl.DataFrame):
+        macro = macro.to_frame()
+    if macro.height == 0:
+        return daily
+    macro_cols = [c for c in macro.columns if c != "date"]
+    out = (
+        daily.sort("date")
+        .join(macro.with_columns(pl.col("date").cast(pl.Date)), on="date", how="left")
+        .sort("date")
+        .with_columns([pl.col(c).forward_fill() for c in macro_cols])
+    )
+    return out
+
+
 def load_strategy_panel(
     database: str | Path,
     config: StrategyConfig,
 ) -> pl.DataFrame:
-    """Load the panel source declared by ``config.panel`` (daily | signals)."""
-    if config.panel == "daily":
-        return load_daily_panel(database)
-    return load_signals_panel(database)
+    """Load the panel source declared by ``config.panel``."""
+    if config.panel == "btc_macro":
+        panel = load_btc_macro_panel(database)
+    elif config.panel == "daily":
+        panel = load_daily_panel(database)
+    else:
+        panel = load_signals_panel(database)
+    return filter_symbols(panel, config.universe)
 
 
 def run_strategy(

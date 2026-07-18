@@ -49,6 +49,7 @@ uv run ccquant wallet alerts --since 1
 uv run ccquant db backup [--dest DIR] [--keep N]  # timestamped file-copy backup
 uv run ccquant status
 uv run ccquant research run --strategy cs_mom_simple     # multi-year CS momentum (panel: daily)
+uv run ccquant research run --strategy btc_macro_ls      # BTC-only macro long/short (~10y)
 uv run ccquant research run --strategy cs_mom_oi_regime  # signals + OI + macro regime template
 uv run ccquant export parquet --out data/export
 uv run ccquant export csv --out data/export

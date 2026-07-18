@@ -207,5 +207,11 @@ def build_features(df: pl.DataFrame, config: StrategyConfig) -> pl.DataFrame:
         raise ValueError(f"panel missing required columns: {sorted(missing)}")
     out = add_price_features(df, config.features)
     out = add_macro_regime(out, config.regime)
-    out = build_alpha_score(out, config.features)
+    # Directional macro timing (or empty mom windows): score = regime composite.
+    if config.portfolio.mode == "directional" or not config.features.mom_windows:
+        out = out.with_columns(
+            pl.col("regime_score").fill_null(0.0).fill_nan(0.0).alias("alpha_score")
+        )
+    else:
+        out = build_alpha_score(out, config.features)
     return out

@@ -79,6 +79,19 @@ Pure weekly CS long/short on 20d/60d momentum. No OI, regime disabled,
 `panel: daily`, walk-forward 504/126/126. Config:
 [`config/strategies/cs_mom_simple.yaml`](../config/strategies/cs_mom_simple.yaml).
 
+### `btc_macro_ls` (BTC-only macro long/short)
+
+Directional Bitcoin timing from a lagged FRED liquidity composite (long / flat /
+short bands). No cross-section. Panel joins BTC OHLCV + `fct_macro_series`
+(`panel: btc_macro`). Config:
+[`config/strategies/btc_macro_ls.yaml`](../config/strategies/btc_macro_ls.yaml).
+
+```bash
+uv run ccquant research run --strategy btc_macro_ls
+```
+
+IR is vs BTC buy-and-hold (equal-weight of the single-name universe).
+
 ### `cs_mom_oi_regime`
 
 Weekly CS long/short: momentum + volume z + OI, gated by lagged macro liquidity.

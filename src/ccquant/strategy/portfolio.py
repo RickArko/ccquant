@@ -1,4 +1,4 @@
-"""Cross-sectional portfolio construction (dollar-neutral L/S)."""
+"""Portfolio construction: cross-sectional L/S or directional macro timing."""
 
 from __future__ import annotations
 
@@ -10,22 +10,16 @@ from ccquant.strategy.spec import StrategyConfig, UniverseSpec
 
 
 def _rebalance_mask(dates: pl.Series, how: str) -> pl.Series:
-    """True on rebalance days. ``weekly`` ≈ Friday (weekday==4) or last available."""
+    """True on rebalance days. ``weekly`` ≈ Friday or last available day of week."""
     if how != "weekly":
         return pl.Series("is_rebalance", [True] * len(dates))
-    # Build from unique sorted dates so "last available before weekend" works.
     uniq = dates.unique().sort()
-    # Polars Date weekday: Monday=1 ... Sunday=7 in some versions; use dt.weekday().
     df = pl.DataFrame({"date": uniq}).with_columns(
-        pl.col("date").dt.weekday().alias("wd")
-    )
-    # Prefer Friday (5 in ISO); else mark last date of each ISO week.
-    df = df.with_columns(
+        pl.col("date").dt.weekday().alias("wd"),
         pl.col("date").dt.strftime("%G-%V").alias("iso_week"),
     )
     friday = df.filter(pl.col("wd") == 5).select("date")
     if friday.height == 0:
-        # Fallback: last day of each ISO week present in the panel.
         week_ends = df.group_by("iso_week").agg(pl.col("date").max().alias("date"))
         rebal_dates = set(week_ends["date"].to_list())
     else:
@@ -33,32 +27,129 @@ def _rebalance_mask(dates: pl.Series, how: str) -> pl.Series:
     return dates.is_in(sorted(rebal_dates))
 
 
-def limit_universe(df: pl.DataFrame, universe: UniverseSpec) -> pl.DataFrame:
-    """Keep top_n symbols by average ADV (liquidity proxy)."""
-    if universe.top_n <= 0 or "adv_usd" not in df.columns:
+def filter_symbols(df: pl.DataFrame, universe: UniverseSpec) -> pl.DataFrame:
+    """Restrict to ``universe.symbols`` when the list is non-empty."""
+    if not universe.symbols:
         return df
+    wanted = {s.upper() for s in universe.symbols}
+    return df.filter(pl.col("symbol").str.to_uppercase().is_in(sorted(wanted)))
+
+
+def limit_universe(df: pl.DataFrame, universe: UniverseSpec) -> pl.DataFrame:
+    """Keep configured symbols and/or top_n by average ADV."""
+    out = filter_symbols(df, universe)
+    if universe.symbols or universe.top_n <= 0 or "adv_usd" not in out.columns:
+        return out
     ranking = (
-        df.group_by("symbol")
+        out.group_by("symbol")
         .agg(pl.col("adv_usd").mean().alias("mean_adv"))
         .sort("mean_adv", descending=True)
         .head(universe.top_n)
         .select("symbol")
     )
-    return df.join(ranking, on="symbol", how="inner")
+    return out.join(ranking, on="symbol", how="inner")
 
 
-def build_target_weights(df: pl.DataFrame, config: StrategyConfig) -> pl.DataFrame:
-    """Assign dollar-neutral target weights on rebalance days; forward-fill daily.
+def _apply_vol_scale(
+    eligible: pl.DataFrame,
+    config: StrategyConfig,
+    *,
+    sleeve_col: str = "sleeve",
+) -> pl.DataFrame:
+    port = config.portfolio
+    vol_col = f"vol_{config.features.vol_window}d"
+    if vol_col in eligible.columns:
+        day_vol = (
+            eligible.filter(pl.col(sleeve_col) != 0.0)
+            .group_by("date")
+            .agg(pl.col(vol_col).median().alias("book_vol"))
+        )
+        eligible = eligible.join(day_vol, on="date", how="left")
+        daily_target = port.vol_target_ann / math.sqrt(365.0)
+        eligible = eligible.with_columns(
+            pl.when(pl.col("book_vol").is_not_null() & (pl.col("book_vol") > 1e-12))
+            .then((daily_target / pl.col("book_vol")).clip(0.1, 5.0))
+            .otherwise(1.0)
+            .alias("vol_scale")
+        )
+    else:
+        eligible = eligible.with_columns(pl.lit(1.0).alias("vol_scale"))
+    return eligible
 
-    Long top quantile of ``alpha_score``, short bottom quantile. Flat when
-    ``regime_active`` is False. Gross exposure scaled toward ``vol_target_ann``.
+
+def _forward_fill_weights(eligible: pl.DataFrame) -> pl.DataFrame:
+    return eligible.sort(["symbol", "date"]).with_columns(
+        pl.when(pl.col("is_rebalance"))
+        .then(pl.col("w_target"))
+        .otherwise(None)
+        .forward_fill()
+        .over("symbol")
+        .fill_null(0.0)
+        .alias("weight")
+    )
+
+
+def build_directional_weights(
+    df: pl.DataFrame, config: StrategyConfig
+) -> pl.DataFrame:
+    """Single-name (or few-name) long/short/flat from macro ``regime_score`` bands.
+
+    On rebalance days:
+    - ``regime_score >= long_z`` → long (+1 before vol scale)
+    - ``regime_score <= short_z`` → short (−1)
+    - otherwise flat
     """
     port = config.portfolio
+    regime = config.regime
     out = limit_universe(df, config.universe).sort(["date", "symbol"])
-    dates = out["date"]
-    out = out.with_columns(_rebalance_mask(dates, port.rebalance).alias("is_rebalance"))
+    out = out.with_columns(
+        _rebalance_mask(out["date"], port.rebalance).alias("is_rebalance")
+    )
+    if "regime_score" not in out.columns:
+        out = out.with_columns(pl.lit(0.0).alias("regime_score"))
 
-    # Rank within date among liquid names.
+    long_z = regime.long_z
+    short_z = regime.short_z
+    if short_z > long_z:
+        short_z, long_z = long_z, short_z
+
+    eligible = out.with_columns(
+        pl.when(~pl.col("is_rebalance"))
+        .then(None)
+        .when(pl.col("regime_score") >= long_z)
+        .then(1.0)
+        .when(pl.col("regime_score") <= short_z)
+        .then(-1.0)
+        .otherwise(0.0)
+        .alias("sleeve")
+    )
+    # Carry last sleeve for vol_scale join helper; w_raw only on rebalance.
+    eligible = eligible.with_columns(
+        pl.col("sleeve").forward_fill().over("symbol").fill_null(0.0).alias("sleeve_ff")
+    )
+    eligible = eligible.with_columns(
+        pl.when(pl.col("is_rebalance"))
+        .then(pl.col("sleeve").fill_null(0.0))
+        .otherwise(0.0)
+        .alias("w_raw")
+    )
+    eligible = _apply_vol_scale(eligible, config, sleeve_col="sleeve_ff")
+    eligible = eligible.with_columns(
+        (pl.col("w_raw") * pl.col("vol_scale")).alias("w_target")
+    )
+    return _forward_fill_weights(eligible)
+
+
+def build_cross_section_weights(
+    df: pl.DataFrame, config: StrategyConfig
+) -> pl.DataFrame:
+    """Dollar-neutral CS long/short from ``alpha_score`` quintiles."""
+    port = config.portfolio
+    out = limit_universe(df, config.universe).sort(["date", "symbol"])
+    out = out.with_columns(
+        _rebalance_mask(out["date"], port.rebalance).alias("is_rebalance")
+    )
+
     eligible = out.with_columns(
         (pl.col("adv_usd").fill_null(0.0) >= port.min_adv_usd).alias("adv_ok"),
         (
@@ -69,13 +160,10 @@ def build_target_weights(df: pl.DataFrame, config: StrategyConfig) -> pl.DataFra
     if "regime_active" not in eligible.columns:
         eligible = eligible.with_columns(pl.lit(True).alias("regime_active"))
 
-    # Quantile rank in [0, 1] among eligible names on rebalance days.
     eligible = eligible.with_columns(
         pl.when(pl.col("adv_ok") & pl.col("score_ok") & pl.col("is_rebalance"))
         .then(
-            pl.col("alpha_score")
-            .rank(method="average")
-            .over("date")
+            pl.col("alpha_score").rank(method="average").over("date")
             / pl.col("alpha_score").count().over("date")
         )
         .otherwise(None)
@@ -97,7 +185,6 @@ def build_target_weights(df: pl.DataFrame, config: StrategyConfig) -> pl.DataFra
         .alias("sleeve")
     )
 
-    # Equal-weight within long/short sleeves → dollar-neutral if both sides nonempty.
     counts = eligible.group_by("date").agg(
         pl.col("sleeve").eq(1.0).sum().alias("n_long"),
         pl.col("sleeve").eq(-1.0).sum().alias("n_short"),
@@ -111,49 +198,24 @@ def build_target_weights(df: pl.DataFrame, config: StrategyConfig) -> pl.DataFra
         .alias("w_raw")
     )
 
-    # Vol-target: scale gross exposure using trailing strategy-ish vol proxy
-    # (median of member vols). On non-rebalance days w_raw is 0; we forward-fill.
-    vol_col = f"vol_{config.features.vol_window}d"
-    if vol_col in eligible.columns:
-        day_vol = (
-            eligible.filter(pl.col("sleeve") != 0.0)
-            .group_by("date")
-            .agg(pl.col(vol_col).median().alias("book_vol"))
-        )
-        eligible = eligible.join(day_vol, on="date", how="left")
-        # Daily vol target ≈ ann / sqrt(365)
-        daily_target = port.vol_target_ann / math.sqrt(365.0)
-        eligible = eligible.with_columns(
-            pl.when(pl.col("book_vol").is_not_null() & (pl.col("book_vol") > 1e-12))
-            .then((daily_target / pl.col("book_vol")).clip(0.1, 5.0))
-            .otherwise(1.0)
-            .alias("vol_scale")
-        )
-    else:
-        eligible = eligible.with_columns(pl.lit(1.0).alias("vol_scale"))
-
+    eligible = _apply_vol_scale(eligible, config)
     eligible = eligible.with_columns(
         (pl.col("w_raw") * pl.col("vol_scale")).alias("w_target")
     )
-
-    # Forward-fill weights per symbol from last rebalance; zero before first.
-    eligible = eligible.sort(["symbol", "date"]).with_columns(
-        pl.when(pl.col("is_rebalance"))
-        .then(pl.col("w_target"))
-        .otherwise(None)
-        .forward_fill()
-        .over("symbol")
-        .fill_null(0.0)
-        .alias("weight")
-    )
-    # Flatten when regime turns off between rebalances.
-    eligible = eligible.with_columns(
+    eligible = _forward_fill_weights(eligible)
+    return eligible.with_columns(
         pl.when(pl.col("regime_active").fill_null(True))
         .then(pl.col("weight"))
         .otherwise(0.0)
         .alias("weight")
     )
-    return eligible
+
+
+def build_target_weights(df: pl.DataFrame, config: StrategyConfig) -> pl.DataFrame:
+    """Dispatch to cross-sectional or directional portfolio construction."""
+    if config.portfolio.mode == "directional":
+        return build_directional_weights(df, config)
+    return build_cross_section_weights(df, config)
 
 
 def dollar_neutral_check(weights: pl.Series, tol: float = 1e-6) -> bool:

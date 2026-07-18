@@ -366,6 +366,69 @@ def test_regime_disabled_always_active() -> None:
     assert bool(feat["regime_active"].all())
 
 
+def test_load_btc_macro_ls_yaml() -> None:
+    cfg = load_strategy_config(Path("config/strategies/btc_macro_ls.yaml"))
+    assert cfg.name == "btc_macro_ls"
+    assert cfg.panel == "btc_macro"
+    assert cfg.portfolio.mode == "directional"
+    assert cfg.universe.symbols == ("BTC",)
+    assert cfg.features.mom_windows == ()
+    assert cfg.regime.disabled is False
+
+
+def test_directional_macro_long_short_flat() -> None:
+    """Regime bands map to +1 / 0 / −1 sleeves on rebalance days."""
+    n = 120
+    dates = _dates(n)
+    # Synthetic regime score: rising then falling through bands.
+    scores = [0.5 if i < 40 else (-0.5 if i >= 80 else 0.0) for i in range(n)]
+    panel = pl.DataFrame(
+        {
+            "symbol": ["BTC"] * n,
+            "date": dates,
+            "close": [100.0 * (1.01 ** i) for i in range(n)],
+            "volume": [1_000_000.0] * n,
+            "open": [100.0] * n,
+            "high": [101.0] * n,
+            "low": [99.0] * n,
+            "m2sl": [15_000.0 + i for i in range(n)],
+            "walcl": [8_000.0 + i for i in range(n)],
+            "dgs10": [3.0] * n,
+            "t10yie": [2.0] * n,
+        }
+    ).with_columns(pl.col("date").cast(pl.Date))
+    cfg = load_strategy_config(Path("config/strategies/btc_macro_ls.yaml"))
+    cfg = StrategyConfig(
+        hypothesis=cfg.hypothesis,
+        label=cfg.label,
+        cost=cfg.cost,
+        walk_forward=WalkForwardSpec(
+            train_days=40, test_days=20, step_days=20, embargo_days=5
+        ),
+        portfolio=cfg.portfolio,
+        regime=cfg.regime,
+        universe=cfg.universe,
+        features=cfg.features,
+        gates=GateSpec(min_net_sharpe=-1e9, min_ir=-1e9),
+        target_notional_usd=1_000.0,
+        max_participation=0.5,
+        panel="btc_macro",
+    )
+    # Inject known regime_score after features by building then overwriting.
+    from ccquant.strategy.portfolio import build_directional_weights
+
+    feat = build_features(panel, cfg).with_columns(
+        pl.Series("regime_score", scores)
+    )
+    weights = build_directional_weights(feat, cfg)
+    rebal = weights.filter(pl.col("is_rebalance"))
+    assert rebal.height > 0
+    # Some long and some short sleeves should appear across the score path.
+    sleeves = set(rebal["sleeve"].drop_nulls().to_list())
+    assert 1.0 in sleeves or any(float(w) > 0 for w in weights["weight"].to_list())
+    assert -1.0 in sleeves or any(float(w) < 0 for w in weights["weight"].to_list())
+
+
 def test_long_panel_multi_fold_cs_mom_simple() -> None:
     """≥800-day synthetic panel with multi-year walk-forward yields multiple folds."""
     panel = make_synthetic_panel(n_days=900)
