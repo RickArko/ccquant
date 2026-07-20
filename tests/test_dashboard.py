@@ -87,13 +87,20 @@ def test_render_dashboard_html_includes_live_tape() -> None:
         as_of=t0,
         source="binance",
         interval="5m",
+        range_key="1h",
         bar_times=(t0 - timedelta(minutes=5), t0),
-        bar_closes=(65_000.0, 65_432.1),
+        bar_opens=(65_000.0, 65_100.0),
+        bar_highs=(65_200.0, 65_500.0),
+        bar_lows=(64_900.0, 65_050.0),
+        bar_closes=(65_100.0, 65_432.1),
     )
     page = render_dashboard_html(snap, live=live)
     assert "LIVE" in page
     assert "65,432.10" in page
-    assert "Live tape" in page
+    assert "live-candle-plot" in page
+    assert 'data-range="1h"' in page
+    assert 'data-interval="5m"' in page
+    assert "candlestick" in page
     assert "metric-latest" in page
     assert "Daily close" in page
     assert "api.binance.com" in page

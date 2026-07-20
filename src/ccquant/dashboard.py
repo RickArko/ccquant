@@ -10,6 +10,7 @@ poll Binance every 15s to keep the headline last price fresh.
 from __future__ import annotations
 
 import html
+import json
 from dataclasses import dataclass
 from datetime import UTC, date, timedelta
 from pathlib import Path
@@ -20,7 +21,7 @@ import numpy as np
 import polars as pl
 
 from ccquant.forecasting import load_daily_panel, load_signals_panel
-from ccquant.live_price import LiveInterval, LiveTape, fetch_live_tape
+from ccquant.live_price import LiveInterval, LiveRange, LiveTape, fetch_live_tape
 
 MOM_LOOKBACK = 12
 LIQ_LOOKBACK = 52
@@ -635,37 +636,17 @@ def render_dashboard_html(
     live_html = ""
     live_js = ""
     if live is not None and live.bar_closes:
-        live_fig = go.Figure(
-            data=[
-                go.Scatter(
-                    x=[t.isoformat() for t in live.bar_times],
-                    y=list(live.bar_closes),
-                    name=f"BTC {live.interval}",
-                    line=dict(color="#F7931A", width=1.6),
-                    fill="tozeroy",
-                    fillcolor="rgba(247,147,26,0.08)",
-                )
-            ]
-        )
-        live_fig.update_layout(
-            template="plotly_dark",
-            height=180,
-            margin=dict(l=40, r=16, t=28, b=28),
-            title=dict(
-                text=f"Live tape · {live.interval} ({live.source})",
-                font=dict(size=13),
-            ),
-            yaxis=dict(title="USD", side="right"),
-            xaxis=dict(title=""),
-            showlegend=False,
-            paper_bgcolor="#12141a",
-            plot_bgcolor="#12141a",
-        )
-        live_chart = live_fig.to_html(
-            full_html=False,
-            include_plotlyjs=False,
-            config={"displayModeBar": False, "responsive": True},
-        )
+        seed = {
+            "x": [t.isoformat() for t in live.bar_times],
+            "open": list(live.bar_opens),
+            "high": list(live.bar_highs),
+            "low": list(live.bar_lows),
+            "close": list(live.bar_closes),
+            "interval": live.interval,
+            "range": live.range_key,
+            "source": live.source,
+        }
+        seed_json = json.dumps(seed, separators=(",", ":"))
         chg = live.change_24h_pct
         chg_txt = _fmt_pct(chg)
         chg_tone = (
@@ -674,10 +655,33 @@ def render_dashboard_html(
         as_of_txt = live.as_of.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
         hi = f"${live.high_24h:,.0f}" if live.high_24h is not None else "—"
         lo = f"${live.low_24h:,.0f}" if live.low_24h is not None else "—"
+
+        def _btn(kind: str, value: str, label: str, active: bool) -> str:
+            cls = "live-btn active" if active else "live-btn"
+            return (
+                f'<button type="button" class="{cls}" '
+                f'data-{kind}="{html.escape(value)}">{html.escape(label)}</button>'
+            )
+
+        range_btns = "".join(
+            [
+                _btn("range", "1h", "1H", live.range_key == "1h"),
+                _btn("range", "1d", "1D", live.range_key == "1d"),
+                _btn("range", "7d", "7D", live.range_key == "7d"),
+            ]
+        )
+        interval_btns = "".join(
+            [
+                _btn("interval", "1m", "1m", live.interval == "1m"),
+                _btn("interval", "5m", "5m", live.interval == "5m"),
+                _btn("interval", "15m", "15m", live.interval == "15m"),
+                _btn("interval", "1h", "1h", live.interval == "1h"),
+            ]
+        )
         live_html = f"""
     <section class="live" aria-label="Live BTC tape">
       <div class="live-head">
-        <div>
+        <div class="live-quote">
           <p class="live-kicker">Latest <span class="pulse">LIVE</span></p>
           <p class="live-price" id="live-price">${live.last:,.2f}</p>
           <p class="live-meta">
@@ -687,64 +691,189 @@ def render_dashboard_html(
             · <span id="live-source">{html.escape(live.source)}</span>
           </p>
         </div>
-        <div class="live-chart" id="live-chart">{live_chart}</div>
+        <div class="live-chart">
+          <div class="live-toolbar">
+            <div class="live-btn-group" id="live-ranges" aria-label="Chart range">
+              {range_btns}
+            </div>
+            <div class="live-btn-group" id="live-intervals" aria-label="Candle size">
+              {interval_btns}
+            </div>
+            <span class="live-chart-label" id="live-chart-label"></span>
+          </div>
+          <div id="live-candle-plot" class="live-candle-plot"></div>
+        </div>
       </div>
     </section>
 """
-        # Client-side poll keeps the headline last price fresh without a server.
-        live_js = """
+        # Candles + ticker refresh in-browser (Binance public REST; no server).
+        live_js = f"""
+<script type="application/json" id="live-seed">{seed_json}</script>
 <script>
-(function () {
+(function () {{
   const PRICE_EL = document.getElementById("live-price");
   const CHG_EL = document.getElementById("live-chg");
   const ASOF_EL = document.getElementById("live-asof");
   const SRC_EL = document.getElementById("live-source");
-  if (!PRICE_EL) return;
+  const PLOT_EL = document.getElementById("live-candle-plot");
+  const LABEL_EL = document.getElementById("live-chart-label");
+  const SEED_EL = document.getElementById("live-seed");
+  if (!PRICE_EL || !PLOT_EL || !SEED_EL || typeof Plotly === "undefined") return;
 
-  function fmtUsd(v) {
-    return "$" + Number(v).toLocaleString(undefined, {
+  const RANGE_SEC = {{ "1h": 3600, "1d": 86400, "7d": 604800 }};
+  const INTERVAL_SEC = {{ "1m": 60, "5m": 300, "15m": 900, "1h": 3600 }};
+  const MAX_BARS = 1000;
+  let state = JSON.parse(SEED_EL.textContent);
+  let rangeKey = state.range || "1h";
+  let interval = state.interval || "5m";
+
+  function fmtUsd(v) {{
+    return "$" + Number(v).toLocaleString(undefined, {{
       minimumFractionDigits: 2, maximumFractionDigits: 2
-    });
-  }
-  function fmtPct(v) {
+    }});
+  }}
+  function fmtPct(v) {{
     const x = 100 * v;
     return (x >= 0 ? "+" : "") + x.toFixed(1) + "%";
-  }
-  function setTone(el, v) {
+  }}
+  function setTone(el, v) {{
     el.classList.remove("tone-pos", "tone-neg", "tone-neu");
     el.classList.add(v > 0 ? "tone-pos" : (v < 0 ? "tone-neg" : "tone-neu"));
-  }
+  }}
+  function barLimit(r, iv) {{
+    return Math.min(MAX_BARS, Math.max(1, Math.floor(RANGE_SEC[r] / INTERVAL_SEC[iv])));
+  }}
+  function candleTrace(d) {{
+    return {{
+      type: "candlestick",
+      x: d.x,
+      open: d.open,
+      high: d.high,
+      low: d.low,
+      close: d.close,
+      increasing: {{ line: {{ color: "#6fbf73" }}, fillcolor: "#6fbf73" }},
+      decreasing: {{ line: {{ color: "#e57373" }}, fillcolor: "#e57373" }},
+      whiskerwidth: 0.4,
+      name: "BTC"
+    }};
+  }}
+  function layout() {{
+    return {{
+      margin: {{ l: 8, r: 48, t: 8, b: 28 }},
+      height: 220,
+      paper_bgcolor: "#12141a",
+      plot_bgcolor: "#12141a",
+      showlegend: false,
+      xaxis: {{
+        gridcolor: "#2a2e38",
+        tickfont: {{ size: 10, color: "#9a958c" }},
+        rangeslider: {{ visible: false }}
+      }},
+      yaxis: {{
+        side: "right",
+        gridcolor: "#2a2e38",
+        tickfont: {{ size: 10, color: "#9a958c" }},
+        tickprefix: "$"
+      }},
+      font: {{ color: "#e8e6e1" }}
+    }};
+  }}
+  function setLabel(n) {{
+    if (!LABEL_EL) return;
+    const capped = n >= MAX_BARS ? " · capped 1000" : "";
+    LABEL_EL.textContent = rangeKey.toUpperCase() + " · " + interval + " · "
+      + n + " bars" + capped;
+  }}
+  function renderCandles(d) {{
+    Plotly.react(PLOT_EL, [candleTrace(d)], layout(), {{
+      displayModeBar: false, responsive: true
+    }});
+    setLabel(d.close.length);
+  }}
+  function setActive(groupId, attr, value) {{
+    document.querySelectorAll("#" + groupId + " .live-btn").forEach(function (b) {{
+      b.classList.toggle("active", b.getAttribute("data-" + attr) === value);
+    }});
+  }}
 
-  async function refreshTicker() {
-    try {
+  async function loadCandles() {{
+    const limit = barLimit(rangeKey, interval);
+    try {{
+      const url = "https://api.binance.com/api/v3/klines?symbol=BTCUSDT"
+        + "&interval=" + encodeURIComponent(interval)
+        + "&limit=" + limit;
+      const r = await fetch(url, {{ cache: "no-store" }});
+      if (!r.ok) throw new Error("klines " + r.status);
+      const rows = await r.json();
+      state = {{
+        x: rows.map(function (row) {{ return new Date(row[0]).toISOString(); }}),
+        open: rows.map(function (row) {{ return parseFloat(row[1]); }}),
+        high: rows.map(function (row) {{ return parseFloat(row[2]); }}),
+        low: rows.map(function (row) {{ return parseFloat(row[3]); }}),
+        close: rows.map(function (row) {{ return parseFloat(row[4]); }}),
+        interval: interval,
+        range: rangeKey,
+        source: "binance"
+      }};
+      if (SRC_EL) SRC_EL.textContent = "binance";
+      renderCandles(state);
+    }} catch (err) {{
+      renderCandles(state);
+      if (SRC_EL && !SRC_EL.textContent.includes("poll blocked")) {{
+        SRC_EL.textContent = (SRC_EL.textContent || "seed") + " · live poll blocked";
+      }}
+    }}
+  }}
+
+  async function refreshTicker() {{
+    try {{
       const r = await fetch(
         "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT",
-        { cache: "no-store" }
+        {{ cache: "no-store" }}
       );
       if (!r.ok) throw new Error("binance " + r.status);
       const t = await r.json();
       const last = parseFloat(t.lastPrice);
       const chg = parseFloat(t.priceChangePercent) / 100;
       PRICE_EL.textContent = fmtUsd(last);
-      if (CHG_EL) {
+      if (CHG_EL) {{
         CHG_EL.textContent = fmtPct(chg);
         setTone(CHG_EL, chg);
-      }
-      if (ASOF_EL) {
+      }}
+      if (ASOF_EL) {{
         const d = new Date(Number(t.closeTime));
         ASOF_EL.textContent = d.toISOString().slice(0, 16).replace("T", " ") + " UTC";
-      }
-      if (SRC_EL) SRC_EL.textContent = "binance";
-    } catch (err) {
-      // Keep seed values from page generation; browser geo-blocks are common.
-      if (SRC_EL && !SRC_EL.textContent.includes("stale")) {
+      }}
+      if (SRC_EL && !SRC_EL.textContent.includes("poll blocked")) {{
+        SRC_EL.textContent = "binance";
+      }}
+    }} catch (err) {{
+      if (SRC_EL && !SRC_EL.textContent.includes("poll blocked")) {{
         SRC_EL.textContent = (SRC_EL.textContent || "seed") + " · live poll blocked";
-      }
-    }
-  }
+      }}
+    }}
+  }}
+
+  document.querySelectorAll("#live-ranges .live-btn").forEach(function (btn) {{
+    btn.addEventListener("click", function () {{
+      rangeKey = btn.getAttribute("data-range");
+      setActive("live-ranges", "range", rangeKey);
+      loadCandles();
+    }});
+  }});
+  document.querySelectorAll("#live-intervals .live-btn").forEach(function (btn) {{
+    btn.addEventListener("click", function () {{
+      interval = btn.getAttribute("data-interval");
+      setActive("live-intervals", "interval", interval);
+      loadCandles();
+    }});
+  }});
+
+  renderCandles(state);
   refreshTicker();
   setInterval(refreshTicker, 15000);
-})();
+  setInterval(loadCandles, 60000);
+}})();
 </script>
 """
 
@@ -872,12 +1001,18 @@ def render_dashboard_html(
     }}
     .live-head {{
       display: grid;
-      grid-template-columns: minmax(160px, 220px) 1fr;
-      gap: 0.75rem 1.25rem;
-      align-items: start;
+      grid-template-columns: minmax(150px, 200px) 1fr;
+      gap: 0.75rem 1rem;
+      align-items: stretch;
     }}
     @media (max-width: 720px) {{
       .live-head {{ grid-template-columns: 1fr; }}
+    }}
+    .live-quote {{
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-height: 220px;
     }}
     .live-kicker {{
       margin: 0;
@@ -906,7 +1041,50 @@ def render_dashboard_html(
     .live-meta .tone-pos {{ color: var(--pos); }}
     .live-meta .tone-neg {{ color: var(--neg); }}
     .live-meta .tone-neu {{ color: var(--neu); }}
-    .live-chart {{ min-height: 160px; }}
+    .live-chart {{
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }}
+    .live-toolbar {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.45rem 0.75rem;
+    }}
+    .live-btn-group {{
+      display: inline-flex;
+      border: 1px solid var(--line);
+    }}
+    .live-btn {{
+      appearance: none;
+      background: transparent;
+      border: 0;
+      border-right: 1px solid var(--line);
+      color: var(--muted);
+      font: inherit;
+      font-size: 0.72rem;
+      letter-spacing: 0.04em;
+      padding: 0.28rem 0.55rem;
+      cursor: pointer;
+    }}
+    .live-btn:last-child {{ border-right: 0; }}
+    .live-btn:hover {{ color: var(--fg); }}
+    .live-btn.active {{
+      background: #1c2029;
+      color: var(--accent);
+    }}
+    .live-chart-label {{
+      font-size: 0.7rem;
+      color: var(--muted);
+      margin-left: auto;
+    }}
+    .live-candle-plot {{
+      width: 100%;
+      min-height: 220px;
+      background: #12141a;
+    }}
     .metrics {{
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
@@ -1014,6 +1192,7 @@ def write_dashboard(
     out: str | Path,
     *,
     live_interval: LiveInterval = "5m",
+    live_range: LiveRange = "1h",
     include_live: bool = True,
 ) -> Path:
     """Build snapshot (+ optional live tape), write HTML, return output path."""
@@ -1021,7 +1200,7 @@ def write_dashboard(
     live: LiveTape | None = None
     if include_live:
         try:
-            live = fetch_live_tape(interval=live_interval)
+            live = fetch_live_tape(interval=live_interval, range_key=live_range)
         except Exception as exc:
             # Dashboard still useful offline / when exchanges are blocked.
             import logging

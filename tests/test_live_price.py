@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-from ccquant.live_price import LiveTape, fetch_live_tape
+from ccquant.live_price import LiveTape, fetch_live_tape, kline_limit
 
 
 class _Resp:
@@ -26,6 +26,13 @@ class _Resp:
         return self._payload
 
 
+def test_kline_limit_defaults() -> None:
+    assert kline_limit("1h", "5m") == 12
+    assert kline_limit("1d", "5m") == 288
+    assert kline_limit("7d", "5m") == 1000  # capped
+    assert kline_limit("7d", "1h") == 168
+
+
 def test_fetch_live_tape_binance(monkeypatch: pytest.MonkeyPatch) -> None:
     now_ms = int(datetime(2026, 7, 19, 12, 0, tzinfo=UTC).timestamp() * 1000)
     ticker = {
@@ -36,8 +43,34 @@ def test_fetch_live_tape_binance(monkeypatch: pytest.MonkeyPatch) -> None:
         "closeTime": now_ms,
     }
     klines = [
-        [now_ms - 300_000, "0", "0", "0", "64800", "0", 0, "0", 0, "0", "0", "0"],
-        [now_ms, "0", "0", "0", "65000.12", "0", 0, "0", 0, "0", "0", "0"],
+        [
+            now_ms - 300_000,
+            "64700",
+            "64900",
+            "64600",
+            "64800",
+            "0",
+            0,
+            "0",
+            0,
+            "0",
+            "0",
+            "0",
+        ],
+        [
+            now_ms,
+            "64800",
+            "65100",
+            "64750",
+            "65000.12",
+            "0",
+            0,
+            "0",
+            0,
+            "0",
+            "0",
+            "0",
+        ],
     ]
 
     def fake_get(
@@ -50,18 +83,23 @@ def test_fetch_live_tape_binance(monkeypatch: pytest.MonkeyPatch) -> None:
         if "klines" in url:
             assert params is not None
             assert params["interval"] == "5m"
+            assert params["limit"] == 12
             return _Resp(klines)
         raise AssertionError(url)
 
     client = MagicMock()
     client.get.side_effect = fake_get
-    tape = fetch_live_tape(interval="5m", client=client)
+    tape = fetch_live_tape(interval="5m", range_key="1h", client=client)
     assert isinstance(tape, LiveTape)
     assert tape.last == pytest.approx(65000.12)
     assert tape.change_24h_pct == pytest.approx(0.015)
     assert tape.source == "binance"
     assert tape.interval == "5m"
+    assert tape.range_key == "1h"
     assert len(tape.bar_closes) == 2
+    assert tape.bar_opens[0] == pytest.approx(64700)
+    assert tape.bar_highs[-1] == pytest.approx(65100)
+    assert tape.bar_lows[0] == pytest.approx(64600)
     assert tape.bar_closes[-1] == pytest.approx(65000.12)
 
 
@@ -77,7 +115,7 @@ def test_fetch_live_tape_coinbase_fallback(monkeypatch: pytest.MonkeyPatch) -> N
             return _Resp({"data": {"amount": "65123.45"}})
         if "candles" in url:
             ts = int(datetime(2026, 7, 19, 12, 0, tzinfo=UTC).timestamp())
-            # newest first
+            # newest first: [time, low, high, open, close, volume]
             return _Resp(
                 [
                     [ts, 64000, 66000, 65000, 65123.45, 1],
@@ -88,7 +126,8 @@ def test_fetch_live_tape_coinbase_fallback(monkeypatch: pytest.MonkeyPatch) -> N
 
     client = MagicMock()
     client.get.side_effect = fake_get
-    tape = fetch_live_tape(interval="5m", client=client)
+    tape = fetch_live_tape(interval="5m", range_key="1h", client=client)
     assert tape.source == "coinbase"
     assert tape.last == pytest.approx(65123.45)
+    assert tape.bar_opens[-1] == pytest.approx(65000)
     assert tape.bar_closes[-1] == pytest.approx(65123.45)

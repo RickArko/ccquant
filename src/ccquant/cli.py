@@ -581,9 +581,16 @@ def dashboard(
         str,
         typer.Option(
             "--live-interval",
-            help="Near-live BTC tape bar size: 1m, 5m, or 15m",
+            help="Initial candle size: 1m, 5m, 15m, or 1h (default 5m)",
         ),
     ] = "5m",
+    live_range: Annotated[
+        str,
+        typer.Option(
+            "--live-range",
+            help="Initial live chart window: 1h, 1d, or 7d (default 1h)",
+        ),
+    ] = "1h",
     live: bool = typer.Option(
         True,
         "--live/--no-live",
@@ -595,10 +602,12 @@ def dashboard(
     from typing import cast
 
     from ccquant.dashboard import write_dashboard
-    from ccquant.live_price import LiveInterval
+    from ccquant.live_price import LiveInterval, LiveRange
 
-    if live_interval not in {"1m", "5m", "15m"}:
-        raise typer.BadParameter("live-interval must be 1m, 5m, or 15m")
+    if live_interval not in {"1m", "5m", "15m", "1h"}:
+        raise typer.BadParameter("live-interval must be 1m, 5m, 15m, or 1h")
+    if live_range not in {"1h", "1d", "7d"}:
+        raise typer.BadParameter("live-range must be 1h, 1d, or 7d")
 
     cfg = load_config(config)
     try:
@@ -606,6 +615,7 @@ def dashboard(
             cfg.database,
             out,
             live_interval=cast(LiveInterval, live_interval),
+            live_range=cast(LiveRange, live_range),
             include_live=live,
         )
     except ImportError as exc:
@@ -619,8 +629,8 @@ def dashboard(
     console.print(f"[dim]{path.as_uri()}[/dim]")
     if live:
         console.print(
-            f"[dim]Live tape: {live_interval} "
-            f"(browser polls Binance every 15s when allowed)[/dim]"
+            f"[dim]Live tape: {live_range} · {live_interval} candles "
+            f"(ticker 15s / candles 60s; range & interval switchable in page)[/dim]"
         )
     if open_browser:
         webbrowser.open(path.as_uri())

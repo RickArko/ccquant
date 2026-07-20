@@ -1,7 +1,8 @@
 """Near-live BTC price tape for the Market Tracker dashboard.
 
-Fetches Binance spot last/24h stats + short-interval klines at render time.
-Falls back to Coinbase public spot if Binance is unreachable (e.g. geo-block).
+Fetches Binance spot last/24h stats + short-interval OHLC klines at render
+time. Falls back to Coinbase public spot if Binance is unreachable
+(e.g. geo-block).
 """
 
 from __future__ import annotations
@@ -19,10 +20,13 @@ BINANCE_API = "https://api.binance.com"
 COINBASE_SPOT = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
 COINBASE_CANDLES = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
 
-LiveInterval = Literal["1m", "5m", "15m"]
+LiveInterval = Literal["1m", "5m", "15m", "1h"]
+LiveRange = Literal["1h", "1d", "7d"]
 
-_INTERVAL_MS = {"1m": 60_000, "5m": 300_000, "15m": 900_000}
-_COINBASE_GRANULARITY = {"1m": 60, "5m": 300, "15m": 900}
+_INTERVAL_SEC = {"1m": 60, "5m": 300, "15m": 900, "1h": 3_600}
+_RANGE_SEC = {"1h": 3_600, "1d": 86_400, "7d": 604_800}
+_COINBASE_GRANULARITY = {"1m": 60, "5m": 300, "15m": 900, "1h": 3_600}
+BINANCE_MAX_KLINES = 1000
 
 
 @dataclass(frozen=True)
@@ -36,39 +40,77 @@ class LiveTape:
     as_of: datetime
     source: str
     interval: LiveInterval
+    range_key: LiveRange
     bar_times: tuple[datetime, ...]
+    bar_opens: tuple[float, ...]
+    bar_highs: tuple[float, ...]
+    bar_lows: tuple[float, ...]
     bar_closes: tuple[float, ...]
+
+
+def kline_limit(range_key: LiveRange, interval: LiveInterval) -> int:
+    """Bars to request for a range/interval pair (capped at Binance max)."""
+    if range_key not in _RANGE_SEC or interval not in _INTERVAL_SEC:
+        raise ValueError(f"unsupported range/interval {range_key!r}/{interval!r}")
+    n = max(1, int(_RANGE_SEC[range_key] / _INTERVAL_SEC[interval]))
+    return min(BINANCE_MAX_KLINES, n)
 
 
 def _parse_binance_klines(
     rows: list[list[object]],
-) -> tuple[tuple[datetime, ...], tuple[float, ...]]:
+) -> tuple[
+    tuple[datetime, ...],
+    tuple[float, ...],
+    tuple[float, ...],
+    tuple[float, ...],
+    tuple[float, ...],
+]:
     times: list[datetime] = []
+    opens: list[float] = []
+    highs: list[float] = []
+    lows: list[float] = []
     closes: list[float] = []
     for row in rows:
         times.append(datetime.fromtimestamp(int(str(row[0])) / 1000, tz=UTC))
+        opens.append(float(str(row[1])))
+        highs.append(float(str(row[2])))
+        lows.append(float(str(row[3])))
         closes.append(float(str(row[4])))
-    return tuple(times), tuple(closes)
+    return (
+        tuple(times),
+        tuple(opens),
+        tuple(highs),
+        tuple(lows),
+        tuple(closes),
+    )
 
 
 def fetch_live_tape(
     *,
     interval: LiveInterval = "5m",
-    limit: int = 72,
+    range_key: LiveRange = "1h",
+    limit: int | None = None,
     client: httpx.Client | None = None,
 ) -> LiveTape:
-    """Fetch near-live BTC last price + short bars (Binance → Coinbase)."""
-    if interval not in _INTERVAL_MS:
+    """Fetch near-live BTC last price + OHLC bars (Binance → Coinbase)."""
+    if interval not in _INTERVAL_SEC:
         raise ValueError(f"unsupported interval {interval!r}")
+    if range_key not in _RANGE_SEC:
+        raise ValueError(f"unsupported range {range_key!r}")
+    n = limit if limit is not None else kline_limit(range_key, interval)
 
     own = client is None
     http = client or httpx.Client(timeout=20.0, follow_redirects=True)
     try:
         try:
-            return _fetch_binance(http, interval=interval, limit=limit)
+            return _fetch_binance(
+                http, interval=interval, range_key=range_key, limit=n
+            )
         except Exception as exc:
             LOGGER.warning("Binance live tape failed (%s); trying Coinbase", exc)
-            return _fetch_coinbase(http, interval=interval, limit=limit)
+            return _fetch_coinbase(
+                http, interval=interval, range_key=range_key, limit=n
+            )
     finally:
         if own:
             http.close()
@@ -78,6 +120,7 @@ def _fetch_binance(
     client: httpx.Client,
     *,
     interval: LiveInterval,
+    range_key: LiveRange,
     limit: int,
 ) -> LiveTape:
     ticker = client.get(
@@ -97,7 +140,7 @@ def _fetch_binance(
         params={"symbol": "BTCUSDT", "interval": interval, "limit": limit},
     )
     kl.raise_for_status()
-    times, closes = _parse_binance_klines(kl.json())
+    times, opens, highs, lows, closes = _parse_binance_klines(kl.json())
     return LiveTape(
         last=last,
         change_24h_pct=change,
@@ -106,7 +149,11 @@ def _fetch_binance(
         as_of=as_of,
         source="binance",
         interval=interval,
+        range_key=range_key,
         bar_times=times,
+        bar_opens=opens,
+        bar_highs=highs,
+        bar_lows=lows,
         bar_closes=closes,
     )
 
@@ -115,6 +162,7 @@ def _fetch_coinbase(
     client: httpx.Client,
     *,
     interval: LiveInterval,
+    range_key: LiveRange,
     limit: int,
 ) -> LiveTape:
     spot = client.get(COINBASE_SPOT)
@@ -131,6 +179,9 @@ def _fetch_coinbase(
     # Coinbase returns [time, low, high, open, close, volume], newest first.
     rows = list(reversed(candles.json()[:limit]))
     times = tuple(datetime.fromtimestamp(int(r[0]), tz=UTC) for r in rows)
+    lows = tuple(float(r[1]) for r in rows)
+    highs = tuple(float(r[2]) for r in rows)
+    opens = tuple(float(r[3]) for r in rows)
     closes = tuple(float(r[4]) for r in rows)
     as_of = times[-1] if times else datetime.now(tz=UTC)
     return LiveTape(
@@ -141,6 +192,10 @@ def _fetch_coinbase(
         as_of=as_of,
         source="coinbase",
         interval=interval,
+        range_key=range_key,
         bar_times=times,
+        bar_opens=opens,
+        bar_highs=highs,
+        bar_lows=lows,
         bar_closes=closes,
     )
