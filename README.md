@@ -135,9 +135,16 @@ Single-page UI (no server) — brand, headline, key metrics, one BTC chart,
 regime strip, outlook:
 
 ```bash
+uv run ccquant sync onchain               # blockchain.info fundamentals (+ BID if keyed)
+uv run ccquant sync etf                   # Farside US spot BTC ETF flows + Yahoo MSTR
+uv run dbt build --select fct_onchain_signals+ --project-dir dbt --profiles-dir dbt
 uv run ccquant dashboard                  # writes data/export/market_tracker.html + opens
 uv run ccquant dashboard --no-open --out data/export/market_tracker.html
 ```
+
+Dashboard chips include on-chain regime plus an **ETF/MSTR demand** health
+indicator (7d Farside net flow + MSTR vs BTC 20d relative strength). Renew
+`BITCOIN_IS_DATA_KEY` for full MVRV/NUPL history (subscription currently required).
 
 ### BTC Long-Term Price Forecast (`BTC.ipynb`)
 

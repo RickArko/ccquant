@@ -1,15 +1,17 @@
 """Lightweight single-page Market Tracker dashboard (HTML + Plotly).
 
-Condenses the notebook surface into one viewport: brand, headline, key
-metrics, one chart, regime strip, and outlook. No HTTP server — write a
-self-contained HTML file via ``ccquant dashboard``.
+Condenses the notebook surface into one viewport: brand, headline, near-live
+BTC tape, key metrics, daily market chart, regime strip, and outlook. No
+HTTP server — write a self-contained HTML file via ``ccquant dashboard``.
+The live tape seeds from Binance/Coinbase at render time; the browser can
+poll Binance every 15s to keep the headline last price fresh.
 """
 
 from __future__ import annotations
 
 import html
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -18,6 +20,7 @@ import numpy as np
 import polars as pl
 
 from ccquant.forecasting import load_daily_panel, load_signals_panel
+from ccquant.live_price import LiveInterval, LiveTape, fetch_live_tape
 
 MOM_LOOKBACK = 12
 LIQ_LOOKBACK = 52
@@ -50,6 +53,10 @@ class MarketSnapshot:
     liq_label: str
     oc_label: str
     breadth_label: str
+    demand_signal: int
+    demand_label: str
+    etf_flow_7d_m: float | None
+    mstr_rel_20d: float | None
     outlook: str
     supporting: str
     freshness_note: str
@@ -97,6 +104,77 @@ def _load_onchain(database: Path) -> pl.DataFrame:
             ).to_arrow_table()
         )
     return df if isinstance(df, pl.DataFrame) else df.to_frame()
+
+
+def _load_etf_total_flows(database: Path) -> pl.DataFrame:
+    with duckdb.connect(str(database), read_only=True) as conn:
+        if not _table_exists(conn, "main", "etf_flows_daily"):
+            return pl.DataFrame()
+        df = pl.from_arrow(
+            conn.execute(
+                """
+                select date, net_flow_usd_m
+                from main.etf_flows_daily
+                where ticker = 'TOTAL' and source = 'farside'
+                order by date
+                """
+            ).to_arrow_table()
+        )
+    return df if isinstance(df, pl.DataFrame) else df.to_frame()
+
+
+def _load_equity(database: Path, symbol: str) -> pl.DataFrame:
+    with duckdb.connect(str(database), read_only=True) as conn:
+        if not _table_exists(conn, "main", "equity_daily"):
+            return pl.DataFrame()
+        df = pl.from_arrow(
+            conn.execute(
+                """
+                select date, close
+                from main.equity_daily
+                where symbol = ?
+                order by date
+                """,
+                [symbol.upper()],
+            ).to_arrow_table()
+        )
+    return df if isinstance(df, pl.DataFrame) else df.to_frame()
+
+
+def _etf_mstr_demand(
+    *,
+    etf_flows: pl.DataFrame,
+    mstr: pl.DataFrame,
+    btc: pl.DataFrame,
+) -> tuple[int, str, float | None, float | None]:
+    from ccquant.etf_flows import mstr_etf_health
+
+    etf_7d: float | None = None
+    if not etf_flows.is_empty() and "net_flow_usd_m" in etf_flows.columns:
+        tail = etf_flows.sort("date").tail(7)
+        if tail.height:
+            etf_7d = _as_float(tail["net_flow_usd_m"].sum())
+
+    mstr_rel: float | None = None
+    if not mstr.is_empty() and not btc.is_empty():
+        m = mstr.with_columns(pl.col("date").cast(pl.Date)).sort("date")
+        b = btc.select(["date", "close"]).with_columns(
+            pl.col("date").cast(pl.Date)
+        )
+        joined = m.join(b, on="date", how="inner", suffix="_btc").sort("date")
+        if joined.height > 20:
+            m_ret = _pct_ret(joined["close"], 20)
+            b_ret = _pct_ret(joined["close_btc"], 20)
+            if m_ret is not None and b_ret is not None:
+                mstr_rel = m_ret - b_ret
+
+    sig, label = mstr_etf_health(etf_flow_7d_m=etf_7d, mstr_rel_20d=mstr_rel)
+    if etf_7d is None and mstr_rel is None:
+        return 0, "MISSING", None, None
+    detail = label
+    if etf_7d is not None:
+        detail = f"{label} · ETF 7d {etf_7d:+.0f}m"
+    return sig, detail, etf_7d, mstr_rel
 
 
 def _as_float(value: object) -> float:
@@ -178,25 +256,60 @@ def _liq_signal(macro_raw: pl.DataFrame) -> tuple[int, str]:
 
 
 def _oc_signal(onchain: pl.DataFrame) -> tuple[int, str]:
+    """On-chain regime from forward-filled fundamentals (sparse pivot-safe).
+
+    Prefers hashrate / active_addresses / fees; uses MVRV/NUPL when they have
+    real variance (not short BID samples or constant fixtures).
+    """
     if onchain.is_empty():
         return 0, "MISSING"
     oc = onchain.with_columns(pl.col("date").cast(pl.Date)).sort("date")
-    candidates = [
+    # Fundamentals first — valuation columns are often sparse or short samples.
+    preferred = [
         c
-        for c in ("mvrv", "nupl", "active_addresses", "hashrate", "fees_usd")
-        if c in oc.columns and oc[c].drop_nulls().len() >= 5
+        for c in (
+            "hashrate",
+            "active_addresses",
+            "fees_usd",
+            "mvrv",
+            "nupl",
+        )
+        if c in oc.columns and oc[c].drop_nulls().len() >= 30
     ]
-    if not candidates:
+    if not preferred:
         return 0, "MISSING"
-    oc = oc.drop_nulls(subset=candidates)
+
+    oc = oc.with_columns([pl.col(c).forward_fill() for c in preferred])
+    # Require overlapping coverage after fill
+    oc = oc.drop_nulls(subset=preferred)
+    if oc.height <= MOM_LOOKBACK + 5:
+        return 0, "MISSING"
+
     varying: list[str] = []
-    for c in candidates:
+    for c in preferred:
         std_v = oc[c].std()
         if std_v is not None and _as_float(std_v) > 1e-12:
             varying.append(c)
+    # Drop near-constant valuation stubs (e.g. short BID sample / fixtures)
+    varying = [
+        c
+        for c in varying
+        if c not in {"mvrv", "nupl"} or oc[c].drop_nulls().len() >= 90
+    ]
     if not varying:
         return 0, "MISSING"
-    mom_lb = min(MOM_LOOKBACK, max(3, oc.height // 3))
+
+    # Weekly spine for momentum horizon comparable to Macro notebook
+    oc = (
+        oc.with_columns(pl.col("date").dt.truncate("1w").alias("week"))
+        .group_by("week")
+        .agg([pl.col(c).last().alias(c) for c in varying])
+        .sort("week")
+        .rename({"week": "date"})
+    )
+    if oc.height <= MOM_LOOKBACK + 2:
+        return 0, "MISSING"
+
     expr = _z_expr(varying[0])
     for c in varying[1:]:
         expr = expr + _z_expr(c)
@@ -209,7 +322,7 @@ def _oc_signal(onchain: pl.DataFrame) -> tuple[int, str]:
             "cycle_index"
         ),
     ).with_columns(
-        (pl.col("cycle_index") - pl.col("cycle_index").shift(mom_lb)).alias(
+        (pl.col("cycle_index") - pl.col("cycle_index").shift(MOM_LOOKBACK)).alias(
             "cycle_mom"
         ),
     )
@@ -220,7 +333,8 @@ def _oc_signal(onchain: pl.DataFrame) -> tuple[int, str]:
     if np.isnan(mom_f):
         return 0, "MISSING"
     bullish = mom_f > 0
-    return (1 if bullish else -1), ("bullish mom" if bullish else "bearish mom")
+    label = "bullish mom" if bullish else "bearish mom"
+    return (1 if bullish else -1), f"{label} ({'+'.join(varying[:3])})"
 
 
 def _breadth_metrics(
@@ -322,6 +436,8 @@ def build_snapshot_from_panels(
     *,
     macro: pl.DataFrame | None = None,
     onchain: pl.DataFrame | None = None,
+    etf_flows: pl.DataFrame | None = None,
+    mstr: pl.DataFrame | None = None,
     freshness_note: str = "",
 ) -> MarketSnapshot:
     """Build a dashboard snapshot from in-memory panels (tests / notebooks)."""
@@ -360,6 +476,11 @@ def build_snapshot_from_panels(
 
     headline = _headline(ret_7d, pct_up)
     stack_score, stack_label = _stack(liq_sig, oc_sig, br_sig)
+    demand_sig, demand_label, etf_7d, mstr_rel = _etf_mstr_demand(
+        etf_flows=etf_flows if etf_flows is not None else pl.DataFrame(),
+        mstr=mstr if mstr is not None else pl.DataFrame(),
+        btc=btc,
+    )
 
     drivers: list[str] = []
     if liq_sig != 0:
@@ -367,6 +488,8 @@ def build_snapshot_from_panels(
     if oc_sig != 0:
         drivers.append(f"on-chain {oc_label}")
     drivers.append(f"{br_label} breadth")
+    if demand_sig != 0 or (etf_7d is not None):
+        drivers.append(f"demand {demand_label}")
     if ret_7d is not None:
         drivers.append(f"BTC 7d {ret_7d * 100:+.1f}%")
 
@@ -400,6 +523,10 @@ def build_snapshot_from_panels(
         liq_label=liq_label,
         oc_label=oc_label,
         breadth_label=br_label,
+        demand_signal=demand_sig,
+        demand_label=demand_label,
+        etf_flow_7d_m=etf_7d,
+        mstr_rel_20d=mstr_rel,
         outlook=_outlook(stack_label, drivers),
         supporting=supporting,
         freshness_note=note,
@@ -428,6 +555,8 @@ def build_market_snapshot(database: str | Path) -> MarketSnapshot:
     daily = load_daily_panel(path)
     macro = _load_macro(path)
     onchain = _load_onchain(path)
+    etf_flows = _load_etf_total_flows(path)
+    mstr = _load_equity(path, "MSTR")
 
     btc_max = (
         daily.filter(pl.col("symbol") == "BTC")
@@ -442,7 +571,12 @@ def build_market_snapshot(database: str | Path) -> MarketSnapshot:
 
     _ = signals  # ensures mart exists; price/breadth use daily panel
     return build_snapshot_from_panels(
-        daily, macro=macro, onchain=onchain, freshness_note=freshness
+        daily,
+        macro=macro,
+        onchain=onchain,
+        etf_flows=etf_flows,
+        mstr=mstr,
+        freshness_note=freshness,
     )
 
 
@@ -458,7 +592,11 @@ def _fmt_share(x: float | None) -> str:
     return f"{100 * x:.0f}%"
 
 
-def render_dashboard_html(snapshot: MarketSnapshot) -> str:
+def render_dashboard_html(
+    snapshot: MarketSnapshot,
+    *,
+    live: LiveTape | None = None,
+) -> str:
     """Return a self-contained single-page HTML dashboard."""
     try:
         import plotly.graph_objects as go
@@ -481,7 +619,7 @@ def render_dashboard_html(snapshot: MarketSnapshot) -> str:
         template="plotly_dark",
         height=320,
         margin=dict(l=48, r=24, t=36, b=36),
-        title=dict(text="BTC close (log)", font=dict(size=14)),
+        title=dict(text="BTC close (log) — market view", font=dict(size=14)),
         yaxis=dict(title="USD", type="log"),
         xaxis=dict(title="Date"),
         showlegend=False,
@@ -493,6 +631,122 @@ def render_dashboard_html(snapshot: MarketSnapshot) -> str:
         include_plotlyjs="cdn",
         config={"displayModeBar": False, "responsive": True},
     )
+
+    live_html = ""
+    live_js = ""
+    if live is not None and live.bar_closes:
+        live_fig = go.Figure(
+            data=[
+                go.Scatter(
+                    x=[t.isoformat() for t in live.bar_times],
+                    y=list(live.bar_closes),
+                    name=f"BTC {live.interval}",
+                    line=dict(color="#F7931A", width=1.6),
+                    fill="tozeroy",
+                    fillcolor="rgba(247,147,26,0.08)",
+                )
+            ]
+        )
+        live_fig.update_layout(
+            template="plotly_dark",
+            height=180,
+            margin=dict(l=40, r=16, t=28, b=28),
+            title=dict(
+                text=f"Live tape · {live.interval} ({live.source})",
+                font=dict(size=13),
+            ),
+            yaxis=dict(title="USD", side="right"),
+            xaxis=dict(title=""),
+            showlegend=False,
+            paper_bgcolor="#12141a",
+            plot_bgcolor="#12141a",
+        )
+        live_chart = live_fig.to_html(
+            full_html=False,
+            include_plotlyjs=False,
+            config={"displayModeBar": False, "responsive": True},
+        )
+        chg = live.change_24h_pct
+        chg_txt = _fmt_pct(chg)
+        chg_tone = (
+            "pos" if (chg or 0) > 0 else ("neg" if (chg or 0) < 0 else "neu")
+        )
+        as_of_txt = live.as_of.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+        hi = f"${live.high_24h:,.0f}" if live.high_24h is not None else "—"
+        lo = f"${live.low_24h:,.0f}" if live.low_24h is not None else "—"
+        live_html = f"""
+    <section class="live" aria-label="Live BTC tape">
+      <div class="live-head">
+        <div>
+          <p class="live-kicker">Latest <span class="pulse">LIVE</span></p>
+          <p class="live-price" id="live-price">${live.last:,.2f}</p>
+          <p class="live-meta">
+            <span id="live-chg" class="tone-{chg_tone}">{chg_txt}</span> 24h
+            · H {hi} / L {lo}
+            · <span id="live-asof">{as_of_txt}</span>
+            · <span id="live-source">{html.escape(live.source)}</span>
+          </p>
+        </div>
+        <div class="live-chart" id="live-chart">{live_chart}</div>
+      </div>
+    </section>
+"""
+        # Client-side poll keeps the headline last price fresh without a server.
+        live_js = """
+<script>
+(function () {
+  const PRICE_EL = document.getElementById("live-price");
+  const CHG_EL = document.getElementById("live-chg");
+  const ASOF_EL = document.getElementById("live-asof");
+  const SRC_EL = document.getElementById("live-source");
+  if (!PRICE_EL) return;
+
+  function fmtUsd(v) {
+    return "$" + Number(v).toLocaleString(undefined, {
+      minimumFractionDigits: 2, maximumFractionDigits: 2
+    });
+  }
+  function fmtPct(v) {
+    const x = 100 * v;
+    return (x >= 0 ? "+" : "") + x.toFixed(1) + "%";
+  }
+  function setTone(el, v) {
+    el.classList.remove("tone-pos", "tone-neg", "tone-neu");
+    el.classList.add(v > 0 ? "tone-pos" : (v < 0 ? "tone-neg" : "tone-neu"));
+  }
+
+  async function refreshTicker() {
+    try {
+      const r = await fetch(
+        "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT",
+        { cache: "no-store" }
+      );
+      if (!r.ok) throw new Error("binance " + r.status);
+      const t = await r.json();
+      const last = parseFloat(t.lastPrice);
+      const chg = parseFloat(t.priceChangePercent) / 100;
+      PRICE_EL.textContent = fmtUsd(last);
+      if (CHG_EL) {
+        CHG_EL.textContent = fmtPct(chg);
+        setTone(CHG_EL, chg);
+      }
+      if (ASOF_EL) {
+        const d = new Date(Number(t.closeTime));
+        ASOF_EL.textContent = d.toISOString().slice(0, 16).replace("T", " ") + " UTC";
+      }
+      if (SRC_EL) SRC_EL.textContent = "binance";
+    } catch (err) {
+      // Keep seed values from page generation; browser geo-blocks are common.
+      if (SRC_EL && !SRC_EL.textContent.includes("stale")) {
+        SRC_EL.textContent = (SRC_EL.textContent || "seed") + " · live poll blocked";
+      }
+    }
+  }
+  refreshTicker();
+  setInterval(refreshTicker, 15000);
+})();
+</script>
+"""
 
     def chip(label: str, value: str, tone: str) -> str:
         return (
@@ -515,8 +769,12 @@ def render_dashboard_html(snapshot: MarketSnapshot) -> str:
     )
 
     btc_px = f"${snapshot.btc_close:,.0f}"
+    live_metric = (
+        f"${live.last:,.2f}" if live is not None else "—"
+    )
     metrics = [
-        ("BTC", btc_px),
+        ("Latest", live_metric),
+        ("Daily close", btc_px),
         ("1d", _fmt_pct(snapshot.ret_1d)),
         ("7d", _fmt_pct(snapshot.ret_7d)),
         ("30d", _fmt_pct(snapshot.ret_30d)),
@@ -526,10 +784,11 @@ def render_dashboard_html(snapshot: MarketSnapshot) -> str:
             f"{_fmt_share(snapshot.pct_up_7d)} · {snapshot.n_universe}",
         ),
         ("Above 50d MA", _fmt_share(snapshot.pct_above_50)),
-        ("As of", snapshot.as_of.isoformat()),
+        ("Daily as of", snapshot.as_of.isoformat()),
     ]
     metrics_html = "".join(
-        f'<div class="metric"><span>{html.escape(k)}</span>'
+        f'<div class="metric{" metric-latest" if k == "Latest" else ""}">'
+        f"<span>{html.escape(k)}</span>"
         f"<strong>{html.escape(v)}</strong></div>"
         for k, v in metrics
     )
@@ -538,6 +797,11 @@ def render_dashboard_html(snapshot: MarketSnapshot) -> str:
             chip("Liquidity", snapshot.liq_label, tone_for(snapshot.liq_signal)),
             chip("On-chain", snapshot.oc_label, tone_for(snapshot.oc_signal)),
             chip("Breadth", snapshot.breadth_label, tone_for(snapshot.breadth_signal)),
+            chip(
+                "ETF/MSTR",
+                snapshot.demand_label,
+                tone_for(snapshot.demand_signal),
+            ),
             chip(
                 "Stack",
                 f"{snapshot.stack_label} ({snapshot.stack_score:+d})",
@@ -601,6 +865,48 @@ def render_dashboard_html(snapshot: MarketSnapshot) -> str:
       margin: 0 0 1.4rem;
       max-width: 36rem;
     }}
+    .live {{
+      border: 1px solid var(--line);
+      padding: 0.9rem 1rem 0.4rem;
+      margin: 0 0 1.25rem;
+    }}
+    .live-head {{
+      display: grid;
+      grid-template-columns: minmax(160px, 220px) 1fr;
+      gap: 0.75rem 1.25rem;
+      align-items: start;
+    }}
+    @media (max-width: 720px) {{
+      .live-head {{ grid-template-columns: 1fr; }}
+    }}
+    .live-kicker {{
+      margin: 0;
+      font-size: 0.72rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }}
+    .pulse {{
+      color: var(--accent);
+      letter-spacing: 0.14em;
+    }}
+    .live-price {{
+      margin: 0.15rem 0 0.25rem;
+      font-family: var(--display);
+      font-size: clamp(1.8rem, 4vw, 2.5rem);
+      font-weight: 500;
+      line-height: 1.1;
+      color: var(--accent);
+    }}
+    .live-meta {{
+      margin: 0;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }}
+    .live-meta .tone-pos {{ color: var(--pos); }}
+    .live-meta .tone-neg {{ color: var(--neg); }}
+    .live-meta .tone-neu {{ color: var(--neu); }}
+    .live-chart {{ min-height: 160px; }}
     .metrics {{
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
@@ -620,6 +926,10 @@ def render_dashboard_html(snapshot: MarketSnapshot) -> str:
     .metric strong {{
       font-size: 1.15rem;
       font-weight: 560;
+    }}
+    .metric-latest strong {{
+      color: var(--accent);
+      font-size: 1.35rem;
     }}
     .chips {{
       display: flex;
@@ -677,9 +987,10 @@ def render_dashboard_html(snapshot: MarketSnapshot) -> str:
     <p class="brand">ccquant · Market Tracker</p>
     <h1>{title}</h1>
     <p class="support">{html.escape(snapshot.supporting)}</p>
+    {live_html}
     <section class="metrics" aria-label="Key metrics">{metrics_html}</section>
     <section class="chips" aria-label="Regime stack">{chips_html}</section>
-    <section class="chart" aria-label="BTC price">{chart_html}</section>
+    <section class="chart" aria-label="BTC daily market view">{chart_html}</section>
     <section class="outlook">
       <h2>Outlook</h2>
       <p>{html.escape(snapshot.outlook)}</p>
@@ -689,8 +1000,10 @@ def render_dashboard_html(snapshot: MarketSnapshot) -> str:
       not a prediction.
       Deep dive: <a href="../notebooks/Market_Tracker.ipynb">Market_Tracker.ipynb</a>
       · Refresh: <code>uv run ccquant sync all</code>
+      · Live tape polls Binance every 15s in-browser when allowed.
     </footer>
   </main>
+  {live_js}
 </body>
 </html>
 """
@@ -699,10 +1012,22 @@ def render_dashboard_html(snapshot: MarketSnapshot) -> str:
 def write_dashboard(
     database: str | Path,
     out: str | Path,
+    *,
+    live_interval: LiveInterval = "5m",
+    include_live: bool = True,
 ) -> Path:
-    """Build snapshot, write HTML, return output path."""
+    """Build snapshot (+ optional live tape), write HTML, return output path."""
     snap = build_market_snapshot(database)
+    live: LiveTape | None = None
+    if include_live:
+        try:
+            live = fetch_live_tape(interval=live_interval)
+        except Exception as exc:
+            # Dashboard still useful offline / when exchanges are blocked.
+            import logging
+
+            logging.getLogger(__name__).warning("live tape unavailable: %s", exc)
     path = Path(out)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_dashboard_html(snap), encoding="utf-8")
+    path.write_text(render_dashboard_html(snap, live=live), encoding="utf-8")
     return path.resolve()

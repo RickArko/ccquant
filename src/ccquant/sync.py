@@ -420,6 +420,54 @@ class MarketSync:
             await asyncio.sleep(macro_cfg.request_delay_seconds)
         return results
 
+    def sync_onchain(self, *, delay_seconds: float = 1.0) -> dict[str, int]:
+        """Fetch blockchain.info fundamentals + optional BID valuation."""
+        from ccquant.onchain_fetch import (
+            fetch_bid_valuation_points,
+            fetch_blockchain_info_points,
+        )
+
+        results: dict[str, int] = {}
+        with httpx.Client(timeout=60.0) as client:
+            bc_points = fetch_blockchain_info_points(
+                client, delay_seconds=delay_seconds
+            )
+            results["blockchain.info"] = self.store.upsert_onchain_series(bc_points)
+
+            bid_points, bid_status = fetch_bid_valuation_points(client)
+            if bid_status == "ok":
+                results["bitcoinisdata"] = self.store.upsert_onchain_series(
+                    bid_points
+                )
+            else:
+                LOGGER.warning(
+                    "bitcoinisdata valuation skipped (%s) — "
+                    "renew BITCOIN_IS_DATA_KEY for MVRV/NUPL history",
+                    bid_status,
+                )
+                results["bitcoinisdata"] = 0
+        return results
+
+    def sync_etf_mstr(self) -> dict[str, int]:
+        """Fetch Farside BTC ETF flows + Yahoo MSTR daily closes."""
+        from ccquant.etf_flows import fetch_farside_btc_flows, fetch_yahoo_daily
+
+        results: dict[str, int] = {}
+        with httpx.Client(timeout=60.0, follow_redirects=True) as client:
+            try:
+                flows = fetch_farside_btc_flows(client)
+                results["etf_flows"] = self.store.upsert_etf_flows(flows)
+            except Exception as exc:
+                LOGGER.warning("Farside ETF flow fetch failed: %s", exc)
+                results["etf_flows"] = 0
+            try:
+                mstr = fetch_yahoo_daily(client, "MSTR", range_="5y")
+                results["mstr"] = self.store.upsert_equity_daily(mstr)
+            except Exception as exc:
+                LOGGER.warning("Yahoo MSTR fetch failed: %s", exc)
+                results["mstr"] = 0
+        return results
+
     async def _fetch_daily(
         self,
         asset: Asset,

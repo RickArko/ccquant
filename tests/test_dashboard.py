@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import polars as pl
 import pytest
@@ -11,6 +11,7 @@ from ccquant.dashboard import (
     build_snapshot_from_panels,
     render_dashboard_html,
 )
+from ccquant.live_price import LiveTape
 
 
 def _synthetic_daily(
@@ -72,3 +73,27 @@ def test_render_dashboard_html_contains_hero() -> None:
     assert "Outlook" in page
     assert "BTC close" in page
     assert "plotly" in page.lower()
+
+
+def test_render_dashboard_html_includes_live_tape() -> None:
+    pytest.importorskip("plotly")
+    snap = build_snapshot_from_panels(_synthetic_daily())
+    t0 = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
+    live = LiveTape(
+        last=65_432.1,
+        change_24h_pct=0.012,
+        high_24h=66_000.0,
+        low_24h=64_000.0,
+        as_of=t0,
+        source="binance",
+        interval="5m",
+        bar_times=(t0 - timedelta(minutes=5), t0),
+        bar_closes=(65_000.0, 65_432.1),
+    )
+    page = render_dashboard_html(snap, live=live)
+    assert "LIVE" in page
+    assert "65,432.10" in page
+    assert "Live tape" in page
+    assert "metric-latest" in page
+    assert "Daily close" in page
+    assert "api.binance.com" in page
