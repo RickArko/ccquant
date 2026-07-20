@@ -502,6 +502,39 @@ def status(config: str | None = typer.Option(None, "--config", "-c")) -> None:
         store.close()
 
 
+@app.command("dashboard")
+def dashboard(
+    config: str | None = typer.Option(None, "--config", "-c"),
+    out: Annotated[Path, typer.Option("--out", help="HTML output path")] = Path(
+        "data/export/market_tracker.html"
+    ),
+    open_browser: bool = typer.Option(
+        True,
+        "--open/--no-open",
+        help="Open the HTML file in the default browser",
+    ),
+) -> None:
+    """Write a single-page Market Tracker HTML dashboard (no server)."""
+    import webbrowser
+
+    from ccquant.dashboard import write_dashboard
+
+    cfg = load_config(config)
+    try:
+        path = write_dashboard(cfg.database, out)
+    except ImportError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"[green]Dashboard written:[/green] {path}")
+    console.print(f"[dim]{path.as_uri()}[/dim]")
+    if open_browser:
+        webbrowser.open(path.as_uri())
+
+
 @export_app.command("parquet")
 def export_parquet(
     config: str | None = typer.Option(None, "--config", "-c"),

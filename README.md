@@ -122,7 +122,7 @@ uv run python -m ipykernel install --user --name=ccquant --display-name="Python 
 In **VS Code / Cursor**: open the `.ipynb` → kernel picker → choose
 `.venv` / **Python (ccquant)**. In a terminal: `uv run jupyter lab notebooks/`.
 
-### Market Tracker (`Market_Tracker.ipynb`)
+### Market Tracker (`Market_Tracker.ipynb` + HTML dashboard)
 
 Fast research surface for **where the market is** (BTC snapshot, universe
 breadth, OI, macro/on-chain regime labels, sync freshness) and **where regimes
@@ -130,6 +130,14 @@ suggest it may go** (stacked score + historical BTC forward returns in similar
 stacks + rule-based outlook). Reads `mart_signals_daily` / `fct_ohlcv_daily` via
 forecasting loaders; deep forecast fans stay in `BTC.ipynb` / `Macro.ipynb` /
 `OnChain_BTC.ipynb`. Degrades with `[MISSING]` when domains are empty.
+
+Single-page UI (no server) — brand, headline, key metrics, one BTC chart,
+regime strip, outlook:
+
+```bash
+uv run ccquant dashboard                  # writes data/export/market_tracker.html + opens
+uv run ccquant dashboard --no-open --out data/export/market_tracker.html
+```
 
 ### BTC Long-Term Price Forecast (`BTC.ipynb`)
 
