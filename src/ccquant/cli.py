@@ -25,6 +25,7 @@ import_app = typer.Typer(help="Import external datasets into DuckDB")
 db_app = typer.Typer(help="Database backup and maintenance")
 wallet_app = typer.Typer(help="Wallet intelligence and on-chain tracking")
 twitter_app = typer.Typer(help="Twitter / X tweet tracking (import-only)")
+research_app = typer.Typer(help="Strategy research / walk-forward evaluation")
 app.add_typer(sync_app, name="sync")
 app.add_typer(export_app, name="export")
 app.add_typer(migrate_app, name="migrate")
@@ -32,6 +33,7 @@ app.add_typer(import_app, name="import")
 app.add_typer(db_app, name="db")
 app.add_typer(wallet_app, name="wallet")
 app.add_typer(twitter_app, name="twitter")
+app.add_typer(research_app, name="research")
 console = Console()
 
 
@@ -897,6 +899,98 @@ def twitter_alerts(
         console.print(table)
     finally:
         store.close()
+
+
+@research_app.command("run")
+def research_run(
+    strategy: Annotated[
+        str,
+        typer.Option(
+            "--strategy",
+            "-s",
+            help="Strategy name (config/strategies/{name}.yaml) or path to YAML",
+        ),
+    ] = "cs_mom_oi_regime",
+    config: str | None = typer.Option(None, "--config", "-c"),
+    out: Annotated[
+        Path | None,
+        typer.Option(
+            "--out",
+            help="Directory for JSON report (default: data/research)",
+        ),
+    ] = None,
+    no_write: bool = typer.Option(
+        False,
+        "--no-write",
+        help="Skip writing the JSON report artifact",
+    ),
+) -> None:
+    """Run a strategy research template (walk-forward, costs, scale gates)."""
+    from ccquant.strategy import run_strategy_detailed
+    from ccquant.strategy.spec import default_strategy_config_path, load_strategy_config
+
+    cfg = load_config(config)
+    strategy_path = Path(strategy)
+    if strategy_path.is_file():
+        strat_cfg_path = strategy_path
+    else:
+        strat_cfg_path = default_strategy_config_path(strategy)
+    if not strat_cfg_path.is_file():
+        raise typer.BadParameter(f"strategy config not found: {strat_cfg_path}")
+
+    write_dir = None if no_write else (out or Path("data/research"))
+    strat = load_strategy_config(strat_cfg_path)
+    result = run_strategy_detailed(
+        database=cfg.database,
+        config_path=strat_cfg_path,
+        config=strat,
+        write_dir=write_dir,
+    )
+    report = result.report
+    console.print(f"[bold]{report.strategy_name}[/bold]  hash={report.config_hash}")
+    console.print(
+        f"panel={strat.panel}  "
+        f"history={report.data_min_date} -> {report.data_max_date}  "
+        f"({report.n_calendar_days} calendar days)  "
+        f"symbols={report.n_symbols}  folds={report.n_folds}"
+    )
+    if report.n_calendar_days < 365:
+        console.print(
+            "[yellow]WARNING: panel history < 365 days — not a multi-year test. "
+            "Run: uv run ccquant sync backfill --interval 1d --full --force "
+            "--top 50[/yellow]"
+        )
+    metrics = report.oos_metrics
+    table = Table(title="OOS metrics")
+    table.add_column("metric")
+    table.add_column("value")
+    for key in (
+        "net_sharpe",
+        "gross_sharpe",
+        "ir_ew",
+        "sortino",
+        "max_drawdown",
+        "calmar",
+        "hit_rate",
+        "avg_turnover",
+        "n_days",
+    ):
+        val = metrics.get(key, float("nan"))
+        table.add_row(key, f"{val:.4f}" if isinstance(val, float) else str(val))
+    console.print(table)
+    console.print(
+        f"capacity_usd={report.capacity_usd:,.0f}  "
+        f"target_notional={strat.target_notional_usd:,.0f}"
+    )
+    if report.passed:
+        console.print("[green]PASSED scale gates[/green]")
+    else:
+        console.print("[red]FAILED scale gates[/red]")
+        for reason in report.gate_reasons:
+            console.print(f"  - {reason}")
+    if write_dir is not None:
+        report_path = write_dir / f"{report.strategy_name}_{report.config_hash}.json"
+        console.print(f"[dim]report -> {report_path}[/dim]")
 
 
 def main() -> None:
