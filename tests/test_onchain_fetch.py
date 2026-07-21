@@ -68,3 +68,14 @@ def test_fetch_blockchain_chart_parses_rows() -> None:
     rows = fetch_blockchain_chart(client, "hash-rate")
     assert len(rows) == 1
     assert rows[0][1] == pytest.approx(100.5)
+
+
+def test_fetch_blockchain_chart_double_429_returns_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exhausted 429 retries must return [] (not None) so callers can iterate."""
+    monkeypatch.setattr("ccquant.onchain_fetch.time.sleep", lambda _s: None)
+    client = MagicMock()
+    client.get.return_value = _Resp({}, status=429)
+    assert fetch_blockchain_chart(client, "hash-rate") == []
+    assert client.get.call_count == 2
