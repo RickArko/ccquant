@@ -581,7 +581,10 @@ def dashboard(
         str,
         typer.Option(
             "--live-interval",
-            help="Initial candle size: 1m, 5m, 15m, or 1h (default 5m)",
+            help=(
+                "Initial candle size by range: "
+                "1h→1m/5m/15m/1h; 1d→1h/4h; 7d→4h/1d"
+            ),
         ),
     ] = "5m",
     live_range: Annotated[
@@ -602,12 +605,19 @@ def dashboard(
     from typing import cast
 
     from ccquant.dashboard import write_dashboard
-    from ccquant.live_price import LiveInterval, LiveRange
+    from ccquant.live_price import (
+        DEFAULT_INTERVAL_FOR_RANGE,
+        INTERVALS_FOR_RANGE,
+        LiveInterval,
+        LiveRange,
+    )
 
-    if live_interval not in {"1m", "5m", "15m", "1h"}:
-        raise typer.BadParameter("live-interval must be 1m, 5m, 15m, or 1h")
     if live_range not in {"1h", "1d", "7d"}:
         raise typer.BadParameter("live-range must be 1h, 1d, or 7d")
+    range_key = cast(LiveRange, live_range)
+    allowed = INTERVALS_FOR_RANGE[range_key]
+    if live_interval not in allowed:
+        live_interval = DEFAULT_INTERVAL_FOR_RANGE[range_key]
 
     cfg = load_config(config)
     try:
@@ -615,7 +625,7 @@ def dashboard(
             cfg.database,
             out,
             live_interval=cast(LiveInterval, live_interval),
-            live_range=cast(LiveRange, live_range),
+            live_range=range_key,
             include_live=live,
         )
     except ImportError as exc:

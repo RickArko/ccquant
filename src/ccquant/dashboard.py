@@ -22,7 +22,14 @@ import numpy as np
 import polars as pl
 
 from ccquant.forecasting import load_daily_panel, load_signals_panel
-from ccquant.live_price import LiveInterval, LiveRange, LiveTape, fetch_live_tape
+from ccquant.live_price import (
+    DEFAULT_INTERVAL_FOR_RANGE,
+    INTERVALS_FOR_RANGE,
+    LiveInterval,
+    LiveRange,
+    LiveTape,
+    fetch_live_tape,
+)
 
 MOM_LOOKBACK = 12
 LIQ_LOOKBACK = 52
@@ -696,13 +703,16 @@ def render_dashboard_html(
                 _btn("range", "7d", "7D", live.range_key == "7d"),
             ]
         )
+        # Seed buttons for the tape's range; JS rebuilds when range changes.
+        seed_range: LiveRange = live.range_key
+        seed_intervals = INTERVALS_FOR_RANGE[seed_range]
+        seed_interval = (
+            live.interval
+            if live.interval in seed_intervals
+            else DEFAULT_INTERVAL_FOR_RANGE[seed_range]
+        )
         interval_btns = "".join(
-            [
-                _btn("interval", "1m", "1m", live.interval == "1m"),
-                _btn("interval", "5m", "5m", live.interval == "5m"),
-                _btn("interval", "15m", "15m", live.interval == "15m"),
-                _btn("interval", "1h", "1h", live.interval == "1h"),
-            ]
+            _btn("interval", iv, iv, iv == seed_interval) for iv in seed_intervals
         )
         tz_btns = "".join(
             _btn("tz", key, label, key == DEFAULT_LIVE_TZ)
@@ -713,6 +723,12 @@ def render_dashboard_html(
             for key, iana, label in LIVE_TZ_PRESETS
         }
         tz_map_js = json.dumps(tz_map, separators=(",", ":"))
+        intervals_for_range_js = json.dumps(
+            INTERVALS_FOR_RANGE, separators=(",", ":")
+        )
+        default_interval_js = json.dumps(
+            DEFAULT_INTERVAL_FOR_RANGE, separators=(",", ":")
+        )
         live_html = f"""
     <section class="live" aria-label="Live BTC tape">
       <div class="live-head">
@@ -761,9 +777,15 @@ def render_dashboard_html(
   const TZ_MAP = {tz_map_js};
   const TZ_STORAGE = "ccquant.liveTz";
   const RANGE_SEC = {{ "1h": 3600, "1d": 86400, "7d": 604800 }};
-  const INTERVAL_SEC = {{ "1m": 60, "5m": 300, "15m": 900, "1h": 3600 }};
-  const CB_GRAN = {{ "1m": 60, "5m": 300, "15m": 900, "1h": 3600 }};
-  // Binance page size; we paginate so 7d×5m (~2016) can fully load.
+  const INTERVAL_SEC = {{
+    "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400
+  }};
+  // Coinbase has no 4h; 6h is the closest public granularity.
+  const CB_GRAN = {{
+    "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 21600, "1d": 86400
+  }};
+  const INTERVALS_FOR_RANGE = {intervals_for_range_js};
+  const DEFAULT_INTERVAL_FOR_RANGE = {default_interval_js};
   const BINANCE_PAGE = 1000;
   const BINANCE_HOSTS = [
     "https://data-api.binance.vision",
@@ -772,7 +794,7 @@ def render_dashboard_html(
   ];
   let state = JSON.parse(SEED_EL.textContent);
   let rangeKey = state.range || "1h";
-  let interval = state.interval || "5m";
+  let interval = state.interval || DEFAULT_INTERVAL_FOR_RANGE[rangeKey] || "5m";
   let tzKey = (function () {{
     try {{
       const saved = localStorage.getItem(TZ_STORAGE);
@@ -784,6 +806,33 @@ def render_dashboard_html(
   let loadSeq = 0;
 
   function tzInfo() {{ return TZ_MAP[tzKey] || TZ_MAP.{DEFAULT_LIVE_TZ}; }}
+  function allowedIntervals(r) {{
+    return INTERVALS_FOR_RANGE[r] || INTERVALS_FOR_RANGE["1h"];
+  }}
+  function ensureIntervalForRange() {{
+    const allowed = allowedIntervals(rangeKey);
+    if (allowed.indexOf(interval) === -1) {{
+      interval = DEFAULT_INTERVAL_FOR_RANGE[rangeKey] || allowed[0];
+    }}
+  }}
+  function syncIntervalButtons() {{
+    const group = document.getElementById("live-intervals");
+    if (!group) return;
+    const allowed = allowedIntervals(rangeKey);
+    ensureIntervalForRange();
+    group.innerHTML = allowed.map(function (iv) {{
+      const cls = "live-btn" + (iv === interval ? " active" : "");
+      return '<button type="button" class="' + cls + '" data-interval="'
+        + iv + '">' + iv + "</button>";
+    }}).join("");
+    group.querySelectorAll(".live-btn").forEach(function (btn) {{
+      btn.addEventListener("click", function () {{
+        interval = btn.getAttribute("data-interval");
+        syncIntervalButtons();
+        loadCandles();
+      }});
+    }});
+  }}
   function fmtUsd(v) {{
     return "$" + Number(v).toLocaleString(undefined, {{
       minimumFractionDigits: 2, maximumFractionDigits: 2
@@ -1074,13 +1123,7 @@ def render_dashboard_html(
     btn.addEventListener("click", function () {{
       rangeKey = btn.getAttribute("data-range");
       setActive("live-ranges", "range", rangeKey);
-      loadCandles();
-    }});
-  }});
-  document.querySelectorAll("#live-intervals .live-btn").forEach(function (btn) {{
-    btn.addEventListener("click", function () {{
-      interval = btn.getAttribute("data-interval");
-      setActive("live-intervals", "interval", interval);
+      syncIntervalButtons();
       loadCandles();
     }});
   }});
@@ -1091,6 +1134,7 @@ def render_dashboard_html(
   }});
 
   setActive("live-tzs", "tz", tzKey);
+  syncIntervalButtons();
   if (lastAsOfMs != null && ASOF_EL) ASOF_EL.textContent = fmtStamp(lastAsOfMs);
   renderCandles(state);
   refreshTicker();
@@ -1422,6 +1466,9 @@ def write_dashboard(
     snap = build_market_snapshot(database)
     live: LiveTape | None = None
     if include_live:
+        allowed = INTERVALS_FOR_RANGE[live_range]
+        if live_interval not in allowed:
+            live_interval = DEFAULT_INTERVAL_FOR_RANGE[live_range]
         try:
             live = fetch_live_tape(interval=live_interval, range_key=live_range)
         except Exception as exc:

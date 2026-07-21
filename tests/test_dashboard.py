@@ -114,3 +114,6 @@ def test_render_dashboard_html_includes_live_tape() -> None:
     assert "ccquant.liveTz" in page
     assert "fetchBinanceKlines" in page
     assert "fetchCoinbaseCandles" in page
+    assert '"1d":["1h","4h"]' in page or '"1d": ["1h", "4h"]' in page
+    assert '"7d":["4h","1d"]' in page or '"7d": ["4h", "1d"]' in page
+    assert "syncIntervalButtons" in page

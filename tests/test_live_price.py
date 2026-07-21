@@ -8,7 +8,13 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-from ccquant.live_price import LiveTape, fetch_live_tape, kline_limit
+from ccquant.live_price import (
+    DEFAULT_INTERVAL_FOR_RANGE,
+    INTERVALS_FOR_RANGE,
+    LiveTape,
+    fetch_live_tape,
+    kline_limit,
+)
 
 
 class _Resp:
@@ -28,9 +34,17 @@ class _Resp:
 
 def test_kline_limit_defaults() -> None:
     assert kline_limit("1h", "5m") == 12
-    assert kline_limit("1d", "5m") == 288
-    assert kline_limit("7d", "5m") == 2016
-    assert kline_limit("7d", "1h") == 168
+    assert kline_limit("1d", "4h") == 6
+    assert kline_limit("7d", "4h") == 42
+    assert kline_limit("7d", "1d") == 7
+
+
+def test_intervals_for_range() -> None:
+    assert INTERVALS_FOR_RANGE["1h"] == ("1m", "5m", "15m", "1h")
+    assert INTERVALS_FOR_RANGE["1d"] == ("1h", "4h")
+    assert INTERVALS_FOR_RANGE["7d"] == ("4h", "1d")
+    assert DEFAULT_INTERVAL_FOR_RANGE["1d"] == "4h"
+    assert DEFAULT_INTERVAL_FOR_RANGE["7d"] == "4h"
 
 
 def test_fetch_live_tape_binance(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -24,12 +24,38 @@ BINANCE_HOSTS = (
 COINBASE_SPOT = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
 COINBASE_CANDLES = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
 
-LiveInterval = Literal["1m", "5m", "15m", "1h"]
+LiveInterval = Literal["1m", "5m", "15m", "1h", "4h", "1d"]
 LiveRange = Literal["1h", "1d", "7d"]
 
-_INTERVAL_SEC = {"1m": 60, "5m": 300, "15m": 900, "1h": 3_600}
+_INTERVAL_SEC = {
+    "1m": 60,
+    "5m": 300,
+    "15m": 900,
+    "1h": 3_600,
+    "4h": 14_400,
+    "1d": 86_400,
+}
 _RANGE_SEC = {"1h": 3_600, "1d": 86_400, "7d": 604_800}
-_COINBASE_GRANULARITY = {"1m": 60, "5m": 300, "15m": 900, "1h": 3_600}
+# Coinbase has no 4h bucket — 6h (21600) is the closest public granularity.
+_COINBASE_GRANULARITY = {
+    "1m": 60,
+    "5m": 300,
+    "15m": 900,
+    "1h": 3_600,
+    "4h": 21_600,
+    "1d": 86_400,
+}
+# Interval buttons offered per chart window (short tape vs multi-day).
+INTERVALS_FOR_RANGE: dict[LiveRange, tuple[LiveInterval, ...]] = {
+    "1h": ("1m", "5m", "15m", "1h"),
+    "1d": ("1h", "4h"),
+    "7d": ("4h", "1d"),
+}
+DEFAULT_INTERVAL_FOR_RANGE: dict[LiveRange, LiveInterval] = {
+    "1h": "5m",
+    "1d": "4h",
+    "7d": "4h",
+}
 BINANCE_PAGE = 1000
 COINBASE_PAGE = 300
 
