@@ -95,9 +95,40 @@ def test_monthly_ohlcv_aggregates() -> None:
     assert v == (30.0, 5.0)
 
 
+def test_sma_and_pi_cycle_helpers() -> None:
+    from ccquant.dashboard import _cross_events, _sma
+
+    closes = [float(i) for i in range(1, 21)]
+    sma5 = _sma(closes, 5)
+    assert sma5[3] is None
+    assert sma5[4] == pytest.approx(3.0)
+    assert sma5[-1] == pytest.approx(18.0)
+    dates = [f"2026-01-{i:02d}" for i in range(1, 6)]
+    fast: list[float | None] = [1.0, 1.0, 3.0, 3.0, 2.0]
+    slow: list[float | None] = [2.0, 2.0, 2.0, 2.0, 2.5]
+    up_x, up_y, down_x, down_y = _cross_events(dates, fast, slow)
+    assert up_x == ["2026-01-03"]
+    assert up_y == [3.0]
+    assert down_x == ["2026-01-05"]
+    assert down_y == [2.0]
+
+
+def test_larsson_states() -> None:
+    from ccquant.dashboard import _larsson_states
+
+    states = _larsson_states(
+        [None, 110.0, 100.0, 100.0],
+        [None, 100.0, 110.0, 100.0],
+        [None, 10.0, 10.0, 10.0],
+        atr_mult=0.3,
+    )
+    assert states == [None, "bull", "bear", "neutral"]
+
+
 def test_render_dashboard_html_contains_hero() -> None:
     pytest.importorskip("plotly")
-    snap = build_snapshot_from_panels(_synthetic_daily())
+    # Need warm-up length for SMA350 / Pi Cycle seed series.
+    snap = build_snapshot_from_panels(_synthetic_daily(n_days=400))
     page = render_dashboard_html(snap)
     assert "ccquant" in page
     assert snap.headline in page
@@ -107,6 +138,16 @@ def test_render_dashboard_html_contains_hero() -> None:
     assert 'data-lt-mode="monthly"' in page
     assert "BTC monthly" in page
     assert "Volume" in page
+    assert 'id="lt-ind-sma"' in page
+    assert 'id="lt-ind-pi"' in page
+    assert 'id="lt-ind-larsson"' in page
+    assert "sma50" in page
+    assert "pi350x2" in page
+    assert "larsson_bull" in page
+    # Toggles default unchecked
+    assert 'id="lt-ind-sma" checked' not in page
+    assert 'id="lt-ind-pi" checked' not in page
+    assert 'id="lt-ind-larsson" checked' not in page
 
 
 def test_render_dashboard_html_includes_live_tape() -> None:

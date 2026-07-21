@@ -33,7 +33,8 @@ from ccquant.live_price import (
 
 MOM_LOOKBACK = 12
 LIQ_LOOKBACK = 52
-CHART_LOOKBACK_DAYS = 730
+# ~5y so SMA200 / Pi Cycle (350d) have enough warm-up on the long-term chart.
+CHART_LOOKBACK_DAYS = 1825
 STALE_WARN_DAYS = 3
 DASHBOARD_TZ = ZoneInfo("America/Chicago")
 # Trading-desk presets exposed in the live tape toolbar (default: Chicago).
@@ -690,6 +691,173 @@ def _monthly_ohlcv(
     )
 
 
+def _sma(values: list[float], window: int) -> list[float | None]:
+    """Simple moving average; ``None`` until the window is warm."""
+    out: list[float | None] = [None] * len(values)
+    if window <= 0:
+        return out
+    run = 0.0
+    for i, v in enumerate(values):
+        run += v
+        if i >= window:
+            run -= values[i - window]
+        if i + 1 >= window:
+            out[i] = run / window
+    return out
+
+
+def _ema(values: list[float], window: int) -> list[float | None]:
+    """Exponential moving average seeded with the SMA of the first window."""
+    out: list[float | None] = [None] * len(values)
+    if window <= 0 or len(values) < window:
+        return out
+    alpha = 2.0 / (window + 1.0)
+    seed = sum(values[:window]) / window
+    out[window - 1] = seed
+    prev = seed
+    for i in range(window, len(values)):
+        prev = alpha * values[i] + (1.0 - alpha) * prev
+        out[i] = prev
+    return out
+
+
+def _atr(
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    window: int,
+) -> list[float | None]:
+    """Average True Range (Wilder) over ``window`` periods."""
+    n = len(closes)
+    out: list[float | None] = [None] * n
+    if n == 0 or window <= 0:
+        return out
+    trs: list[float] = []
+    for i in range(n):
+        if i == 0:
+            trs.append(highs[i] - lows[i])
+        else:
+            trs.append(
+                max(
+                    highs[i] - lows[i],
+                    abs(highs[i] - closes[i - 1]),
+                    abs(lows[i] - closes[i - 1]),
+                )
+            )
+    if n < window:
+        return out
+    atr = sum(trs[:window]) / window
+    out[window - 1] = atr
+    for i in range(window, n):
+        atr = (atr * (window - 1) + trs[i]) / window
+        out[i] = atr
+    return out
+
+
+def _cross_events(
+    dates: list[str],
+    fast: list[float | None],
+    slow: list[float | None],
+) -> tuple[list[str], list[float], list[str], list[float]]:
+    """Return (up_x, up_y, down_x, down_y) where fast crosses slow."""
+    up_x: list[str] = []
+    up_y: list[float] = []
+    down_x: list[str] = []
+    down_y: list[float] = []
+    for i in range(1, len(dates)):
+        f0, s0 = fast[i - 1], slow[i - 1]
+        f1, s1 = fast[i], slow[i]
+        if f0 is None or s0 is None or f1 is None or s1 is None:
+            continue
+        if f0 <= s0 and f1 > s1:
+            up_x.append(dates[i])
+            up_y.append(f1)
+        elif f0 >= s0 and f1 < s1:
+            down_x.append(dates[i])
+            down_y.append(f1)
+    return up_x, up_y, down_x, down_y
+
+
+def _larsson_states(
+    ema_fast: list[float | None],
+    ema_slow: list[float | None],
+    atr: list[float | None],
+    *,
+    atr_mult: float = 0.3,
+) -> list[str | None]:
+    """Larsson-style regime: bull / bear / neutral via EMA gap vs ATR band.
+
+    Reconstruction of the publicly described EMA30/EMA60 + 0.3·ATR(60) filter
+    (the commercial Larsson Line parameters are proprietary).
+    """
+    states: list[str | None] = []
+    for f, s, a in zip(ema_fast, ema_slow, atr, strict=True):
+        if f is None or s is None or a is None:
+            states.append(None)
+            continue
+        gap = f - s
+        zone = atr_mult * a
+        if gap > zone:
+            states.append("bull")
+        elif gap < -zone:
+            states.append("bear")
+        else:
+            states.append("neutral")
+    return states
+
+
+def _mask_by_state(
+    values: list[float | None],
+    states: list[str | None],
+    want: str,
+) -> list[float | None]:
+    """Keep ``values`` only where ``states == want`` (else ``None`` for gaps)."""
+    return [v if s == want else None for v, s in zip(values, states, strict=True)]
+
+
+def _long_term_indicator_seed(snapshot: MarketSnapshot) -> dict[str, object]:
+    """Build JSON-serializable series for the daily long-term chart toggles."""
+    dates = [d.isoformat() for d in snapshot.btc_dates]
+    closes = list(snapshot.btc_closes)
+    highs = list(snapshot.btc_highs)
+    lows = list(snapshot.btc_lows)
+
+    sma50 = _sma(closes, 50)
+    sma200 = _sma(closes, 200)
+    sma111 = _sma(closes, 111)
+    sma350 = _sma(closes, 350)
+    pi_double = [None if v is None else 2.0 * v for v in sma350]
+    golden_x, golden_y, death_x, death_y = _cross_events(dates, sma50, sma200)
+    pi_up_x, pi_up_y, _, _ = _cross_events(dates, sma111, pi_double)
+
+    ema30 = _ema(closes, 30)
+    ema60 = _ema(closes, 60)
+    atr60 = _atr(highs, lows, closes, 60)
+    larsson = _larsson_states(ema30, ema60, atr60)
+    latest_state = next((s for s in reversed(larsson) if s is not None), None)
+
+    return {
+        "dates": dates,
+        "close": closes,
+        "sma50": sma50,
+        "sma200": sma200,
+        "sma111": sma111,
+        "pi350x2": pi_double,
+        "golden_x": golden_x,
+        "golden_y": golden_y,
+        "death_x": death_x,
+        "death_y": death_y,
+        "pi_top_x": pi_up_x,
+        "pi_top_y": pi_up_y,
+        "ema30": ema30,
+        "ema60": ema60,
+        "larsson_bull": _mask_by_state(ema30, larsson, "bull"),
+        "larsson_bear": _mask_by_state(ema30, larsson, "bear"),
+        "larsson_neutral": _mask_by_state(ema30, larsson, "neutral"),
+        "larsson_state": latest_state,
+    }
+
+
 def render_dashboard_html(
     snapshot: MarketSnapshot,
     *,
@@ -704,32 +872,8 @@ def render_dashboard_html(
             "plotly is required for the dashboard. Install with: uv sync"
         ) from exc
 
-    daily_fig = go.Figure(
-        data=[
-            go.Scatter(
-                x=list(snapshot.btc_dates),
-                y=list(snapshot.btc_closes),
-                name="BTC",
-                line=dict(color="#F7931A", width=2),
-            )
-        ]
-    )
-    daily_fig.update_layout(
-        template="plotly_dark",
-        height=320,
-        margin=dict(l=48, r=24, t=36, b=36),
-        title=dict(text="BTC close (log) — market view", font=dict(size=14)),
-        yaxis=dict(title="USD", type="log"),
-        xaxis=dict(title="Date"),
-        showlegend=False,
-        paper_bgcolor="#12141a",
-        plot_bgcolor="#12141a",
-    )
-    daily_chart = daily_fig.to_html(
-        full_html=False,
-        include_plotlyjs="cdn",
-        config={"displayModeBar": False, "responsive": True},
-    )
+    lt_seed = _long_term_indicator_seed(snapshot)
+    lt_seed_json = json.dumps(lt_seed, separators=(",", ":"))
 
     m_dates, m_o, m_h, m_l, m_c, m_v = _monthly_ohlcv(
         snapshot.btc_dates,
@@ -789,9 +933,10 @@ def render_dashboard_html(
     monthly_fig.update_yaxes(title_text="USD", type="log", row=1, col=1)
     monthly_fig.update_yaxes(title_text="Vol", row=2, col=1)
     monthly_fig.update_xaxes(title_text="Month", row=2, col=1)
+    # CDN here so the JS-built daily plot (and live tape) can use Plotly.
     monthly_chart = monthly_fig.to_html(
         full_html=False,
-        include_plotlyjs=False,
+        include_plotlyjs="cdn",
         config={"displayModeBar": False, "responsive": True},
     )
     chart_html = f"""
@@ -803,10 +948,25 @@ def render_dashboard_html(
           <button type="button" class="live-btn"
                   data-lt-mode="monthly">Monthly</button>
         </div>
-        <span class="live-chart-label">long-term market view</span>
+        <div class="lt-ind-group" id="lt-indicators"
+             aria-label="Long-term indicators">
+          <label class="lt-ind" title="50/200 SMA trend filter (golden/death cross)">
+            <input type="checkbox" id="lt-ind-sma" /> 50/200 SMA
+          </label>
+          <label class="lt-ind" title="Pi Cycle Top: 111 DMA vs 2×350 DMA">
+            <input type="checkbox" id="lt-ind-pi" /> Pi Cycle
+          </label>
+          <label class="lt-ind" title="Larsson-style EMA30/60 + 0.3×ATR(60)">
+            <input type="checkbox" id="lt-ind-larsson" /> Larsson Line
+          </label>
+        </div>
+        <span class="live-chart-label" id="lt-ind-status"></span>
       </div>
-      <div id="lt-daily" class="lt-pane">{daily_chart}</div>
+      <div id="lt-daily" class="lt-pane">
+        <div id="lt-daily-plot" class="lt-daily-plot"></div>
+      </div>
       <div id="lt-monthly" class="lt-pane" hidden>{monthly_chart}</div>
+      <script type="application/json" id="lt-seed">{lt_seed_json}</script>
 """
     lt_js = """
 <script>
@@ -814,7 +974,143 @@ def render_dashboard_html(
   const modes = document.getElementById("lt-modes");
   const daily = document.getElementById("lt-daily");
   const monthly = document.getElementById("lt-monthly");
-  if (!modes || !daily || !monthly) return;
+  const plotEl = document.getElementById("lt-daily-plot");
+  const seedEl = document.getElementById("lt-seed");
+  const statusEl = document.getElementById("lt-ind-status");
+  const smaCb = document.getElementById("lt-ind-sma");
+  const piCb = document.getElementById("lt-ind-pi");
+  const larssonCb = document.getElementById("lt-ind-larsson");
+  if (!modes || !daily || !monthly || !plotEl || !seedEl) return;
+  if (typeof Plotly === "undefined") return;
+
+  const seed = JSON.parse(seedEl.textContent);
+
+  function layout() {
+    return {
+      template: "plotly_dark",
+      height: 360,
+      margin: { l: 48, r: 24, t: 36, b: 36 },
+      title: { text: "BTC close (log) — market view", font: { size: 14 } },
+      yaxis: { title: "USD", type: "log" },
+      xaxis: { title: "Date" },
+      showlegend: true,
+      legend: {
+        orientation: "h", y: 1.12, x: 0, font: { size: 10, color: "#9a958c" }
+      },
+      paper_bgcolor: "#12141a",
+      plot_bgcolor: "#12141a",
+      font: { color: "#e8e6e1" }
+    };
+  }
+
+  function buildTraces() {
+    const showSma = !!(smaCb && smaCb.checked);
+    const showPi = !!(piCb && piCb.checked);
+    const showLarsson = !!(larssonCb && larssonCb.checked);
+    const traces = [{
+      type: "scatter",
+      mode: "lines",
+      name: "BTC",
+      x: seed.dates,
+      y: seed.close,
+      line: { color: "#F7931A", width: 2 }
+    }];
+    if (showSma) {
+      traces.push({
+        type: "scatter", mode: "lines", name: "SMA 50",
+        x: seed.dates, y: seed.sma50,
+        line: { color: "#6fa8dc", width: 1.4 }
+      });
+      traces.push({
+        type: "scatter", mode: "lines", name: "SMA 200",
+        x: seed.dates, y: seed.sma200,
+        line: { color: "#c27ba0", width: 1.4 }
+      });
+      if (seed.golden_x && seed.golden_x.length) {
+        traces.push({
+          type: "scatter", mode: "markers", name: "Golden cross",
+          x: seed.golden_x, y: seed.golden_y,
+          marker: { color: "#6fbf73", size: 9, symbol: "triangle-up" }
+        });
+      }
+      if (seed.death_x && seed.death_x.length) {
+        traces.push({
+          type: "scatter", mode: "markers", name: "Death cross",
+          x: seed.death_x, y: seed.death_y,
+          marker: { color: "#e57373", size: 9, symbol: "triangle-down" }
+        });
+      }
+    }
+    if (showPi) {
+      traces.push({
+        type: "scatter", mode: "lines", name: "Pi 111 DMA",
+        x: seed.dates, y: seed.sma111,
+        line: { color: "#ffd666", width: 1.5 }
+      });
+      traces.push({
+        type: "scatter", mode: "lines", name: "Pi 2×350 DMA",
+        x: seed.dates, y: seed.pi350x2,
+        line: { color: "#9b59b6", width: 1.5, dash: "dot" }
+      });
+      if (seed.pi_top_x && seed.pi_top_x.length) {
+        traces.push({
+          type: "scatter", mode: "markers", name: "Pi Cycle top",
+          x: seed.pi_top_x, y: seed.pi_top_y,
+          marker: {
+            color: "#e74c3c", size: 11, symbol: "star",
+            line: { color: "#fff", width: 0.5 }
+          }
+        });
+      }
+    }
+    if (showLarsson) {
+      traces.push({
+        type: "scatter", mode: "lines", name: "EMA 60",
+        x: seed.dates, y: seed.ema60,
+        line: { color: "#7f8c8d", width: 1.2, dash: "dash" }
+      });
+      traces.push({
+        type: "scatter", mode: "lines", name: "Larsson bull",
+        x: seed.dates, y: seed.larsson_bull, connectgaps: false,
+        line: { color: "#d4af37", width: 2.6 }
+      });
+      traces.push({
+        type: "scatter", mode: "lines", name: "Larsson bear",
+        x: seed.dates, y: seed.larsson_bear, connectgaps: false,
+        line: { color: "#5dade2", width: 2.6 }
+      });
+      traces.push({
+        type: "scatter", mode: "lines", name: "Larsson wait",
+        x: seed.dates, y: seed.larsson_neutral, connectgaps: false,
+        line: { color: "#95a5a6", width: 2.2 }
+      });
+    }
+    if (statusEl) {
+      const bits = [];
+      if (showSma) bits.push("50/200 SMA");
+      if (showPi) bits.push("Pi Cycle");
+      if (showLarsson && seed.larsson_state) {
+        bits.push("Larsson: " + seed.larsson_state);
+      } else if (showLarsson) {
+        bits.push("Larsson Line");
+      }
+      statusEl.textContent = bits.length
+        ? bits.join(" · ")
+        : "long-term market view";
+    }
+    return traces;
+  }
+
+  function renderDaily() {
+    Plotly.react(plotEl, buildTraces(), layout(), {
+      displayModeBar: false, responsive: true
+    });
+  }
+
+  [smaCb, piCb, larssonCb].forEach(function (el) {
+    if (el) el.addEventListener("change", renderDaily);
+  });
+
   modes.querySelectorAll(".live-btn").forEach(function (btn) {
     btn.addEventListener("click", function () {
       const mode = btn.getAttribute("data-lt-mode");
@@ -824,15 +1120,19 @@ def render_dashboard_html(
       const showMonthly = mode === "monthly";
       daily.hidden = showMonthly;
       monthly.hidden = !showMonthly;
-      // Plotly needs a resize after becoming visible.
+      const ind = document.getElementById("lt-indicators");
+      if (ind) ind.style.opacity = showMonthly ? "0.35" : "1";
       if (typeof Plotly !== "undefined") {
         const pane = showMonthly ? monthly : daily;
         pane.querySelectorAll(".js-plotly-plot").forEach(function (el) {
           try { Plotly.Plots.resize(el); } catch (err) {}
         });
+        if (!showMonthly) renderDaily();
       }
     });
   });
+
+  renderDaily();
 })();
 </script>
 """
@@ -1581,6 +1881,30 @@ def render_dashboard_html(
       align-items: center;
       gap: 0.45rem 0.75rem;
       margin: 0 0 0.35rem;
+    }}
+    .lt-ind-group {{
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 0.55rem 0.85rem;
+      margin-left: 0.25rem;
+    }}
+    .lt-ind {{
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+      cursor: pointer;
+      user-select: none;
+    }}
+    .lt-ind input {{
+      accent-color: var(--accent);
+      margin: 0;
+    }}
+    .lt-daily-plot {{
+      width: 100%;
+      min-height: 360px;
+      background: #12141a;
     }}
     .lt-pane[hidden] {{ display: none !important; }}
     .outlook {{
