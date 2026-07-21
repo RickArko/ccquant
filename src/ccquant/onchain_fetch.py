@@ -53,13 +53,20 @@ def fetch_blockchain_chart(
             time.sleep(60)
             continue
         resp.raise_for_status()
-        vals = resp.json()["values"]
-        return [
-            (datetime.fromtimestamp(int(v["x"]), tz=UTC).date(), float(v["y"]))
-            for v in vals
-            if v.get("y") is not None
-        ]
-    return []
+        payload = resp.json()
+        vals = payload.get("values") if isinstance(payload, dict) else None
+        if not isinstance(vals, list):
+            return []
+        out: list[tuple[date, float]] = []
+        for v in vals:
+            if not isinstance(v, dict) or v.get("y") is None or v.get("x") is None:
+                continue
+            try:
+                day = datetime.fromtimestamp(int(v["x"]), tz=UTC).date()
+                out.append((day, float(v["y"])))
+            except (TypeError, ValueError):
+                continue
+        return out
 
 
 def fetch_blockchain_info_points(
