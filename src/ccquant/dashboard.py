@@ -94,7 +94,11 @@ class MarketSnapshot:
     supporting: str
     freshness_note: str
     btc_dates: tuple[date, ...]
+    btc_opens: tuple[float, ...]
+    btc_highs: tuple[float, ...]
+    btc_lows: tuple[float, ...]
     btc_closes: tuple[float, ...]
+    btc_volumes: tuple[float, ...]
 
 
 def _table_exists(conn: duckdb.DuckDBPyConnection, schema: str, table: str) -> bool:
@@ -534,7 +538,12 @@ def build_snapshot_from_panels(
         supporting = "Breadth is balanced; wait for confirmation."
 
     chart_from = as_of - timedelta(days=CHART_LOOKBACK_DAYS)
-    chart = btc.filter(pl.col("date") >= chart_from)
+    chart_cols = ["date", "open", "high", "low", "close"]
+    if "volume" in btc.columns:
+        chart_cols.append("volume")
+    chart = btc.filter(pl.col("date") >= chart_from).select(chart_cols)
+    if "volume" not in chart.columns:
+        chart = chart.with_columns(pl.lit(0.0).alias("volume"))
     note = freshness_note or f"BTC daily through {as_of}"
 
     return MarketSnapshot(
@@ -564,7 +573,11 @@ def build_snapshot_from_panels(
         supporting=supporting,
         freshness_note=note,
         btc_dates=tuple(d for d in chart["date"].to_list() if isinstance(d, date)),
+        btc_opens=tuple(_as_float(x) for x in chart["open"].to_list()),
+        btc_highs=tuple(_as_float(x) for x in chart["high"].to_list()),
+        btc_lows=tuple(_as_float(x) for x in chart["low"].to_list()),
         btc_closes=tuple(_as_float(x) for x in chart["close"].to_list()),
+        btc_volumes=tuple(_as_float(x) for x in chart["volume"].to_list()),
     )
 
 
@@ -625,6 +638,58 @@ def _fmt_share(x: float | None) -> str:
     return f"{100 * x:.0f}%"
 
 
+def _monthly_ohlcv(
+    dates: tuple[date, ...],
+    opens: tuple[float, ...],
+    highs: tuple[float, ...],
+    lows: tuple[float, ...],
+    closes: tuple[float, ...],
+    volumes: tuple[float, ...],
+) -> tuple[
+    tuple[date, ...],
+    tuple[float, ...],
+    tuple[float, ...],
+    tuple[float, ...],
+    tuple[float, ...],
+    tuple[float, ...],
+]:
+    """Aggregate daily OHLC+volume into calendar-month bars."""
+    if not dates:
+        return (), (), (), (), (), ()
+    months: list[date] = []
+    m_open: list[float] = []
+    m_high: list[float] = []
+    m_low: list[float] = []
+    m_close: list[float] = []
+    m_vol: list[float] = []
+    cur_key: tuple[int, int] | None = None
+    for d, o, h, lo, c, v in zip(
+        dates, opens, highs, lows, closes, volumes, strict=True
+    ):
+        key = (d.year, d.month)
+        if key != cur_key:
+            months.append(date(d.year, d.month, 1))
+            m_open.append(o)
+            m_high.append(h)
+            m_low.append(lo)
+            m_close.append(c)
+            m_vol.append(v)
+            cur_key = key
+        else:
+            m_high[-1] = max(m_high[-1], h)
+            m_low[-1] = min(m_low[-1], lo)
+            m_close[-1] = c
+            m_vol[-1] += v
+    return (
+        tuple(months),
+        tuple(m_open),
+        tuple(m_high),
+        tuple(m_low),
+        tuple(m_close),
+        tuple(m_vol),
+    )
+
+
 def render_dashboard_html(
     snapshot: MarketSnapshot,
     *,
@@ -633,12 +698,13 @@ def render_dashboard_html(
     """Return a self-contained single-page HTML dashboard."""
     try:
         import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
     except ImportError as exc:
         raise ImportError(
             "plotly is required for the dashboard. Install with: uv sync"
         ) from exc
 
-    fig = go.Figure(
+    daily_fig = go.Figure(
         data=[
             go.Scatter(
                 x=list(snapshot.btc_dates),
@@ -648,7 +714,7 @@ def render_dashboard_html(
             )
         ]
     )
-    fig.update_layout(
+    daily_fig.update_layout(
         template="plotly_dark",
         height=320,
         margin=dict(l=48, r=24, t=36, b=36),
@@ -659,11 +725,117 @@ def render_dashboard_html(
         paper_bgcolor="#12141a",
         plot_bgcolor="#12141a",
     )
-    chart_html = fig.to_html(
+    daily_chart = daily_fig.to_html(
         full_html=False,
         include_plotlyjs="cdn",
         config={"displayModeBar": False, "responsive": True},
     )
+
+    m_dates, m_o, m_h, m_l, m_c, m_v = _monthly_ohlcv(
+        snapshot.btc_dates,
+        snapshot.btc_opens,
+        snapshot.btc_highs,
+        snapshot.btc_lows,
+        snapshot.btc_closes,
+        snapshot.btc_volumes,
+    )
+    vol_colors = [
+        "#6fbf73" if c >= o else "#e57373" for o, c in zip(m_o, m_c, strict=True)
+    ]
+    monthly_fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.04,
+        row_heights=[0.72, 0.28],
+    )
+    monthly_fig.add_trace(
+        go.Candlestick(
+            x=[d.isoformat() for d in m_dates],
+            open=list(m_o),
+            high=list(m_h),
+            low=list(m_l),
+            close=list(m_c),
+            name="BTC",
+            increasing_line_color="#6fbf73",
+            increasing_fillcolor="#6fbf73",
+            decreasing_line_color="#e57373",
+            decreasing_fillcolor="#e57373",
+        ),
+        row=1,
+        col=1,
+    )
+    monthly_fig.add_trace(
+        go.Bar(
+            x=[d.isoformat() for d in m_dates],
+            y=list(m_v),
+            name="Volume",
+            marker_color=vol_colors,
+            opacity=0.75,
+        ),
+        row=2,
+        col=1,
+    )
+    monthly_fig.update_layout(
+        template="plotly_dark",
+        height=400,
+        margin=dict(l=48, r=24, t=36, b=36),
+        title=dict(text="BTC monthly — candles + volume", font=dict(size=14)),
+        showlegend=False,
+        paper_bgcolor="#12141a",
+        plot_bgcolor="#12141a",
+        xaxis_rangeslider_visible=False,
+    )
+    monthly_fig.update_yaxes(title_text="USD", type="log", row=1, col=1)
+    monthly_fig.update_yaxes(title_text="Vol", row=2, col=1)
+    monthly_fig.update_xaxes(title_text="Month", row=2, col=1)
+    monthly_chart = monthly_fig.to_html(
+        full_html=False,
+        include_plotlyjs=False,
+        config={"displayModeBar": False, "responsive": True},
+    )
+    chart_html = f"""
+      <div class="lt-toolbar">
+        <div class="live-btn-group" id="lt-modes"
+             aria-label="Long-term chart mode">
+          <button type="button" class="live-btn active"
+                  data-lt-mode="daily">Daily</button>
+          <button type="button" class="live-btn"
+                  data-lt-mode="monthly">Monthly</button>
+        </div>
+        <span class="live-chart-label">long-term market view</span>
+      </div>
+      <div id="lt-daily" class="lt-pane">{daily_chart}</div>
+      <div id="lt-monthly" class="lt-pane" hidden>{monthly_chart}</div>
+"""
+    lt_js = """
+<script>
+(function () {
+  const modes = document.getElementById("lt-modes");
+  const daily = document.getElementById("lt-daily");
+  const monthly = document.getElementById("lt-monthly");
+  if (!modes || !daily || !monthly) return;
+  modes.querySelectorAll(".live-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      const mode = btn.getAttribute("data-lt-mode");
+      modes.querySelectorAll(".live-btn").forEach(function (b) {
+        b.classList.toggle("active", b === btn);
+      });
+      const showMonthly = mode === "monthly";
+      daily.hidden = showMonthly;
+      monthly.hidden = !showMonthly;
+      // Plotly needs a resize after becoming visible.
+      if (typeof Plotly !== "undefined") {
+        const pane = showMonthly ? monthly : daily;
+        pane.querySelectorAll(".js-plotly-plot").forEach(function (el) {
+          try { Plotly.Plots.resize(el); } catch (err) {}
+        });
+      }
+    });
+  });
+})();
+</script>
+"""
 
     live_html = ""
     live_js = ""
@@ -1403,6 +1575,14 @@ def render_dashboard_html(
       border-top: 1px solid var(--line);
       padding-top: 0.5rem;
     }}
+    .lt-toolbar {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.45rem 0.75rem;
+      margin: 0 0 0.35rem;
+    }}
+    .lt-pane[hidden] {{ display: none !important; }}
     .outlook {{
       border-top: 1px solid var(--line);
       padding-top: 1rem;
@@ -1435,7 +1615,7 @@ def render_dashboard_html(
     {live_html}
     <section class="metrics" aria-label="Key metrics">{metrics_html}</section>
     <section class="chips" aria-label="Regime stack">{chips_html}</section>
-    <section class="chart" aria-label="BTC daily market view">{chart_html}</section>
+    <section class="chart" aria-label="BTC long-term market view">{chart_html}</section>
     <section class="outlook">
       <h2>Outlook</h2>
       <p>{html.escape(snapshot.outlook)}</p>
@@ -1448,6 +1628,7 @@ def render_dashboard_html(
       · Live tape polls Binance every 15s in-browser when allowed.
     </footer>
   </main>
+  {lt_js}
   {live_js}
 </body>
 </html>

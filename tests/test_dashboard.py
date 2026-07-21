@@ -64,6 +64,37 @@ def test_build_snapshot_requires_btc() -> None:
         build_snapshot_from_panels(daily)
 
 
+def test_build_snapshot_includes_ohlcv() -> None:
+    snap = build_snapshot_from_panels(_synthetic_daily())
+    assert len(snap.btc_dates) == len(snap.btc_opens) == len(snap.btc_closes)
+    assert len(snap.btc_volumes) == len(snap.btc_closes)
+    assert snap.btc_volumes[-1] > 0
+
+
+def test_monthly_ohlcv_aggregates() -> None:
+    from ccquant.dashboard import _monthly_ohlcv
+
+    dates = (
+        date(2026, 1, 10),
+        date(2026, 1, 20),
+        date(2026, 2, 5),
+    )
+    months, o, h, lo, c, v = _monthly_ohlcv(
+        dates,
+        (100.0, 110.0, 120.0),
+        (105.0, 115.0, 130.0),
+        (95.0, 100.0, 118.0),
+        (102.0, 112.0, 125.0),
+        (10.0, 20.0, 5.0),
+    )
+    assert months == (date(2026, 1, 1), date(2026, 2, 1))
+    assert o == (100.0, 120.0)
+    assert h == (115.0, 130.0)
+    assert lo == (95.0, 118.0)
+    assert c == (112.0, 125.0)
+    assert v == (30.0, 5.0)
+
+
 def test_render_dashboard_html_contains_hero() -> None:
     pytest.importorskip("plotly")
     snap = build_snapshot_from_panels(_synthetic_daily())
@@ -73,6 +104,9 @@ def test_render_dashboard_html_contains_hero() -> None:
     assert "Outlook" in page
     assert "BTC close" in page
     assert "plotly" in page.lower()
+    assert 'data-lt-mode="monthly"' in page
+    assert "BTC monthly" in page
+    assert "Volume" in page
 
 
 def test_render_dashboard_html_includes_live_tape() -> None:
