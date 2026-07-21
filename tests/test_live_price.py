@@ -29,7 +29,7 @@ class _Resp:
 def test_kline_limit_defaults() -> None:
     assert kline_limit("1h", "5m") == 12
     assert kline_limit("1d", "5m") == 288
-    assert kline_limit("7d", "5m") == 1000  # capped
+    assert kline_limit("7d", "5m") == 2016
     assert kline_limit("7d", "1h") == 168
 
 
@@ -93,7 +93,7 @@ def test_fetch_live_tape_binance(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(tape, LiveTape)
     assert tape.last == pytest.approx(65000.12)
     assert tape.change_24h_pct == pytest.approx(0.015)
-    assert tape.source == "binance"
+    assert "binance" in tape.source
     assert tape.interval == "5m"
     assert tape.range_key == "1h"
     assert len(tape.bar_closes) == 2
@@ -109,7 +109,7 @@ def test_fetch_live_tape_coinbase_fallback(monkeypatch: pytest.MonkeyPatch) -> N
         params: dict[str, object] | None = None,
         **_kw: object,
     ) -> _Resp:
-        if "binance" in url:
+        if "binance" in url or "binance.vision" in url:
             return _Resp({}, status=451)
         if "prices/BTC-USD/spot" in url:
             return _Resp({"data": {"amount": "65123.45"}})

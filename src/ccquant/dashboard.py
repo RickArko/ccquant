@@ -12,9 +12,10 @@ from __future__ import annotations
 import html
 import json
 from dataclasses import dataclass
-from datetime import UTC, date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 import duckdb
 import numpy as np
@@ -27,6 +28,30 @@ MOM_LOOKBACK = 12
 LIQ_LOOKBACK = 52
 CHART_LOOKBACK_DAYS = 730
 STALE_WARN_DAYS = 3
+DASHBOARD_TZ = ZoneInfo("America/Chicago")
+# Trading-desk presets exposed in the live tape toolbar (default: Chicago).
+LIVE_TZ_PRESETS: tuple[tuple[str, str, str], ...] = (
+    ("ny", "America/New_York", "NY"),
+    ("utc", "UTC", "UTC"),
+    ("ct", "America/Chicago", "CT"),
+)
+DEFAULT_LIVE_TZ = "ct"
+
+
+def _to_tz(dt: datetime, tz: ZoneInfo) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=tz)
+    return dt.astimezone(tz)
+
+
+def _fmt_tz(dt: datetime, tz: ZoneInfo = DASHBOARD_TZ) -> str:
+    """Format an aware datetime in ``tz`` (e.g. 2026-07-19 07:00 CDT)."""
+    return _to_tz(dt, tz).strftime("%Y-%m-%d %H:%M %Z")
+
+
+def _ms(dt: datetime) -> int:
+    aware = dt if dt.tzinfo is not None else dt.replace(tzinfo=ZoneInfo("UTC"))
+    return int(aware.timestamp() * 1000)
 
 Headline = Literal["Risk-on", "Mixed", "Risk-off"]
 StackLabel = Literal["Constructive", "Neutral / mixed", "Defensive"]
@@ -637,11 +662,12 @@ def render_dashboard_html(
     live_js = ""
     if live is not None and live.bar_closes:
         seed = {
-            "x": [t.isoformat() for t in live.bar_times],
+            "t_ms": [_ms(t) for t in live.bar_times],
             "open": list(live.bar_opens),
             "high": list(live.bar_highs),
             "low": list(live.bar_lows),
             "close": list(live.bar_closes),
+            "as_of_ms": _ms(live.as_of),
             "interval": live.interval,
             "range": live.range_key,
             "source": live.source,
@@ -652,7 +678,7 @@ def render_dashboard_html(
         chg_tone = (
             "pos" if (chg or 0) > 0 else ("neg" if (chg or 0) < 0 else "neu")
         )
-        as_of_txt = live.as_of.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+        as_of_txt = _fmt_tz(live.as_of, DASHBOARD_TZ)
         hi = f"${live.high_24h:,.0f}" if live.high_24h is not None else "—"
         lo = f"${live.low_24h:,.0f}" if live.low_24h is not None else "—"
 
@@ -678,6 +704,15 @@ def render_dashboard_html(
                 _btn("interval", "1h", "1h", live.interval == "1h"),
             ]
         )
+        tz_btns = "".join(
+            _btn("tz", key, label, key == DEFAULT_LIVE_TZ)
+            for key, _iana, label in LIVE_TZ_PRESETS
+        )
+        tz_map = {
+            key: {"iana": iana, "label": label}
+            for key, iana, label in LIVE_TZ_PRESETS
+        }
+        tz_map_js = json.dumps(tz_map, separators=(",", ":"))
         live_html = f"""
     <section class="live" aria-label="Live BTC tape">
       <div class="live-head">
@@ -698,6 +733,9 @@ def render_dashboard_html(
             </div>
             <div class="live-btn-group" id="live-intervals" aria-label="Candle size">
               {interval_btns}
+            </div>
+            <div class="live-btn-group" id="live-tzs" aria-label="Timezone">
+              {tz_btns}
             </div>
             <span class="live-chart-label" id="live-chart-label"></span>
           </div>
@@ -720,13 +758,32 @@ def render_dashboard_html(
   const SEED_EL = document.getElementById("live-seed");
   if (!PRICE_EL || !PLOT_EL || !SEED_EL || typeof Plotly === "undefined") return;
 
+  const TZ_MAP = {tz_map_js};
+  const TZ_STORAGE = "ccquant.liveTz";
   const RANGE_SEC = {{ "1h": 3600, "1d": 86400, "7d": 604800 }};
   const INTERVAL_SEC = {{ "1m": 60, "5m": 300, "15m": 900, "1h": 3600 }};
-  const MAX_BARS = 1000;
+  const CB_GRAN = {{ "1m": 60, "5m": 300, "15m": 900, "1h": 3600 }};
+  // Binance page size; we paginate so 7d×5m (~2016) can fully load.
+  const BINANCE_PAGE = 1000;
+  const BINANCE_HOSTS = [
+    "https://data-api.binance.vision",
+    "https://api.binance.com",
+    "https://api.binance.us"
+  ];
   let state = JSON.parse(SEED_EL.textContent);
   let rangeKey = state.range || "1h";
   let interval = state.interval || "5m";
+  let tzKey = (function () {{
+    try {{
+      const saved = localStorage.getItem(TZ_STORAGE);
+      if (saved && TZ_MAP[saved]) return saved;
+    }} catch (err) {{}}
+    return "{DEFAULT_LIVE_TZ}";
+  }})();
+  let lastAsOfMs = state.as_of_ms || null;
+  let loadSeq = 0;
 
+  function tzInfo() {{ return TZ_MAP[tzKey] || TZ_MAP.{DEFAULT_LIVE_TZ}; }}
   function fmtUsd(v) {{
     return "$" + Number(v).toLocaleString(undefined, {{
       minimumFractionDigits: 2, maximumFractionDigits: 2
@@ -740,13 +797,40 @@ def render_dashboard_html(
     el.classList.remove("tone-pos", "tone-neg", "tone-neu");
     el.classList.add(v > 0 ? "tone-pos" : (v < 0 ? "tone-neg" : "tone-neu"));
   }}
-  function barLimit(r, iv) {{
-    return Math.min(MAX_BARS, Math.max(1, Math.floor(RANGE_SEC[r] / INTERVAL_SEC[iv])));
+  function tzParts(ms) {{
+    const parts = new Intl.DateTimeFormat("en-US", {{
+      timeZone: tzInfo().iana,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+      timeZoneName: "short"
+    }}).formatToParts(new Date(ms));
+    const m = {{}};
+    parts.forEach(function (p) {{ if (p.type !== "literal") m[p.type] = p.value; }});
+    return m;
+  }}
+  function fmtStamp(ms) {{
+    const m = tzParts(ms);
+    return m.year + "-" + m.month + "-" + m.day + " "
+      + m.hour + ":" + m.minute + " " + m.timeZoneName;
+  }}
+  function fmtAxis(ms) {{
+    const m = tzParts(ms);
+    return m.year + "-" + m.month + "-" + m.day + " "
+      + m.hour + ":" + m.minute + ":" + m.second;
+  }}
+  function barsWanted(r, iv) {{
+    return Math.max(1, Math.floor(RANGE_SEC[r] / INTERVAL_SEC[iv]));
   }}
   function candleTrace(d) {{
+    const xs = (d.t_ms || []).map(fmtAxis);
     return {{
       type: "candlestick",
-      x: d.x,
+      x: xs,
       open: d.open,
       high: d.high,
       low: d.low,
@@ -764,12 +848,19 @@ def render_dashboard_html(
       paper_bgcolor: "#12141a",
       plot_bgcolor: "#12141a",
       showlegend: false,
+      uirevision: "live-candles",
       xaxis: {{
+        autorange: true,
         gridcolor: "#2a2e38",
         tickfont: {{ size: 10, color: "#9a958c" }},
-        rangeslider: {{ visible: false }}
+        rangeslider: {{ visible: false }},
+        title: {{
+          text: tzInfo().iana,
+          font: {{ size: 10, color: "#9a958c" }}
+        }}
       }},
       yaxis: {{
+        autorange: true,
         side: "right",
         gridcolor: "#2a2e38",
         tickfont: {{ size: 10, color: "#9a958c" }},
@@ -778,79 +869,204 @@ def render_dashboard_html(
       font: {{ color: "#e8e6e1" }}
     }};
   }}
-  function setLabel(n) {{
+  function setLabel(n, note) {{
     if (!LABEL_EL) return;
-    const capped = n >= MAX_BARS ? " · capped 1000" : "";
+    const want = barsWanted(rangeKey, interval);
+    const short = n < want ? " · partial" : "";
     LABEL_EL.textContent = rangeKey.toUpperCase() + " · " + interval + " · "
-      + n + " bars" + capped;
+      + n + "/" + want + " bars · " + tzInfo().label
+      + short + (note ? " · " + note : "");
   }}
-  function renderCandles(d) {{
+  function renderCandles(d, note) {{
     Plotly.react(PLOT_EL, [candleTrace(d)], layout(), {{
       displayModeBar: false, responsive: true
     }});
-    setLabel(d.close.length);
+    setLabel((d.close || []).length, note || "");
   }}
   function setActive(groupId, attr, value) {{
     document.querySelectorAll("#" + groupId + " .live-btn").forEach(function (b) {{
       b.classList.toggle("active", b.getAttribute("data-" + attr) === value);
     }});
   }}
+  function applyTz(next) {{
+    if (!TZ_MAP[next]) return;
+    tzKey = next;
+    try {{ localStorage.setItem(TZ_STORAGE, tzKey); }} catch (err) {{}}
+    setActive("live-tzs", "tz", tzKey);
+    if (lastAsOfMs != null && ASOF_EL) ASOF_EL.textContent = fmtStamp(lastAsOfMs);
+    renderCandles(state);
+  }}
+
+  async function fetchJson(url) {{
+    const r = await fetch(url, {{ cache: "no-store" }});
+    if (!r.ok) throw new Error(url + " → " + r.status);
+    return r.json();
+  }}
+
+  async function fetchBinanceKlines(want) {{
+    let lastErr = null;
+    for (let h = 0; h < BINANCE_HOSTS.length; h++) {{
+      const host = BINANCE_HOSTS[h];
+      try {{
+        const rows = [];
+        let endTime = null;
+        while (rows.length < want) {{
+          const page = Math.min(BINANCE_PAGE, want - rows.length);
+          let url = host + "/api/v3/klines?symbol=BTCUSDT"
+            + "&interval=" + encodeURIComponent(interval)
+            + "&limit=" + page;
+          if (endTime != null) url += "&endTime=" + endTime;
+          const batch = await fetchJson(url);
+          if (!batch.length) break;
+          rows.unshift.apply(rows, batch);
+          endTime = Number(batch[0][0]) - 1;
+          if (batch.length < page) break;
+        }}
+        if (!rows.length) throw new Error("empty klines");
+        // Deduplicate by open time (pagination overlap).
+        const seen = {{}};
+        const dedup = [];
+        for (let i = 0; i < rows.length; i++) {{
+          const t = Number(rows[i][0]);
+          if (seen[t]) continue;
+          seen[t] = true;
+          dedup.push(rows[i]);
+        }}
+        dedup.sort(function (a, b) {{ return Number(a[0]) - Number(b[0]); }});
+        const cut = dedup.slice(Math.max(0, dedup.length - want));
+        return {{ host: host, rows: cut }};
+      }} catch (err) {{
+        lastErr = err;
+      }}
+    }}
+    throw lastErr || new Error("binance unavailable");
+  }}
+
+  async function fetchCoinbaseCandles(want) {{
+    const gran = CB_GRAN[interval];
+    if (!gran) throw new Error("coinbase gran");
+    const rows = [];
+    let endSec = Math.floor(Date.now() / 1000);
+    // Coinbase returns max ~300 candles per request.
+    while (rows.length < want) {{
+      const page = Math.min(300, want - rows.length);
+      const startSec = endSec - page * gran;
+      const url = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
+        + "?granularity=" + gran
+        + "&start=" + new Date(startSec * 1000).toISOString()
+        + "&end=" + new Date(endSec * 1000).toISOString();
+      const batch = await fetchJson(url);
+      if (!batch.length) break;
+      // [time, low, high, open, close, volume], newest first
+      batch.sort(function (a, b) {{ return a[0] - b[0]; }});
+      rows.unshift.apply(rows, batch);
+      endSec = Number(batch[0][0]) - gran;
+      if (batch.length < page) break;
+    }}
+    if (!rows.length) throw new Error("empty coinbase candles");
+    const seen = {{}};
+    const dedup = [];
+    for (let i = 0; i < rows.length; i++) {{
+      const t = Number(rows[i][0]);
+      if (seen[t]) continue;
+      seen[t] = true;
+      dedup.push(rows[i]);
+    }}
+    dedup.sort(function (a, b) {{ return a[0] - b[0]; }});
+    return dedup.slice(Math.max(0, dedup.length - want));
+  }}
+
+  function stateFromBinance(rows, source) {{
+    return {{
+      t_ms: rows.map(function (row) {{ return Number(row[0]); }}),
+      open: rows.map(function (row) {{ return parseFloat(row[1]); }}),
+      high: rows.map(function (row) {{ return parseFloat(row[2]); }}),
+      low: rows.map(function (row) {{ return parseFloat(row[3]); }}),
+      close: rows.map(function (row) {{ return parseFloat(row[4]); }}),
+      as_of_ms: lastAsOfMs,
+      interval: interval,
+      range: rangeKey,
+      source: source
+    }};
+  }}
+
+  function stateFromCoinbase(rows) {{
+    return {{
+      t_ms: rows.map(function (row) {{ return Number(row[0]) * 1000; }}),
+      open: rows.map(function (row) {{ return parseFloat(row[3]); }}),
+      high: rows.map(function (row) {{ return parseFloat(row[2]); }}),
+      low: rows.map(function (row) {{ return parseFloat(row[1]); }}),
+      close: rows.map(function (row) {{ return parseFloat(row[4]); }}),
+      as_of_ms: lastAsOfMs,
+      interval: interval,
+      range: rangeKey,
+      source: "coinbase"
+    }};
+  }}
 
   async function loadCandles() {{
-    const limit = barLimit(rangeKey, interval);
+    const seq = ++loadSeq;
+    const want = barsWanted(rangeKey, interval);
+    if (LABEL_EL) LABEL_EL.textContent = "Loading " + rangeKey.toUpperCase()
+      + " · " + interval + "…";
     try {{
-      const url = "https://api.binance.com/api/v3/klines?symbol=BTCUSDT"
-        + "&interval=" + encodeURIComponent(interval)
-        + "&limit=" + limit;
-      const r = await fetch(url, {{ cache: "no-store" }});
-      if (!r.ok) throw new Error("klines " + r.status);
-      const rows = await r.json();
-      state = {{
-        x: rows.map(function (row) {{ return new Date(row[0]).toISOString(); }}),
-        open: rows.map(function (row) {{ return parseFloat(row[1]); }}),
-        high: rows.map(function (row) {{ return parseFloat(row[2]); }}),
-        low: rows.map(function (row) {{ return parseFloat(row[3]); }}),
-        close: rows.map(function (row) {{ return parseFloat(row[4]); }}),
-        interval: interval,
-        range: rangeKey,
-        source: "binance"
-      }};
-      if (SRC_EL) SRC_EL.textContent = "binance";
-      renderCandles(state);
+      try {{
+        const got = await fetchBinanceKlines(want);
+        if (seq !== loadSeq) return;
+        const host = got.host.replace("https://", "");
+        state = stateFromBinance(got.rows, host);
+        if (SRC_EL) SRC_EL.textContent = host;
+        renderCandles(state);
+        return;
+      }} catch (binanceErr) {{
+        const cb = await fetchCoinbaseCandles(want);
+        if (seq !== loadSeq) return;
+        state = stateFromCoinbase(cb);
+        if (SRC_EL) SRC_EL.textContent = "coinbase";
+        renderCandles(state);
+      }}
     }} catch (err) {{
-      renderCandles(state);
-      if (SRC_EL && !SRC_EL.textContent.includes("poll blocked")) {{
-        SRC_EL.textContent = (SRC_EL.textContent || "seed") + " · live poll blocked";
+      if (seq !== loadSeq) return;
+      renderCandles(state, "fetch blocked");
+      if (SRC_EL) {{
+        SRC_EL.textContent = (state.source || "seed") + " · live poll blocked";
       }}
     }}
   }}
 
   async function refreshTicker() {{
+    let lastErr = null;
+    for (let h = 0; h < BINANCE_HOSTS.length; h++) {{
+      try {{
+        const t = await fetchJson(
+          BINANCE_HOSTS[h] + "/api/v3/ticker/24hr?symbol=BTCUSDT"
+        );
+        const last = parseFloat(t.lastPrice);
+        const chg = parseFloat(t.priceChangePercent) / 100;
+        PRICE_EL.textContent = fmtUsd(last);
+        if (CHG_EL) {{
+          CHG_EL.textContent = fmtPct(chg);
+          setTone(CHG_EL, chg);
+        }}
+        lastAsOfMs = Number(t.closeTime);
+        if (ASOF_EL) ASOF_EL.textContent = fmtStamp(lastAsOfMs);
+        return;
+      }} catch (err) {{
+        lastErr = err;
+      }}
+    }}
     try {{
-      const r = await fetch(
-        "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT",
-        {{ cache: "no-store" }}
+      const spot = await fetchJson(
+        "https://api.coinbase.com/v2/prices/BTC-USD/spot"
       );
-      if (!r.ok) throw new Error("binance " + r.status);
-      const t = await r.json();
-      const last = parseFloat(t.lastPrice);
-      const chg = parseFloat(t.priceChangePercent) / 100;
-      PRICE_EL.textContent = fmtUsd(last);
-      if (CHG_EL) {{
-        CHG_EL.textContent = fmtPct(chg);
-        setTone(CHG_EL, chg);
-      }}
-      if (ASOF_EL) {{
-        const d = new Date(Number(t.closeTime));
-        ASOF_EL.textContent = d.toISOString().slice(0, 16).replace("T", " ") + " UTC";
-      }}
-      if (SRC_EL && !SRC_EL.textContent.includes("poll blocked")) {{
-        SRC_EL.textContent = "binance";
-      }}
+      PRICE_EL.textContent = fmtUsd(parseFloat(spot.data.amount));
+      lastAsOfMs = Date.now();
+      if (ASOF_EL) ASOF_EL.textContent = fmtStamp(lastAsOfMs);
     }} catch (err) {{
       if (SRC_EL && !SRC_EL.textContent.includes("poll blocked")) {{
         SRC_EL.textContent = (SRC_EL.textContent || "seed") + " · live poll blocked";
       }}
+      void lastErr;
     }}
   }}
 
@@ -868,7 +1084,14 @@ def render_dashboard_html(
       loadCandles();
     }});
   }});
+  document.querySelectorAll("#live-tzs .live-btn").forEach(function (btn) {{
+    btn.addEventListener("click", function () {{
+      applyTz(btn.getAttribute("data-tz"));
+    }});
+  }});
 
+  setActive("live-tzs", "tz", tzKey);
+  if (lastAsOfMs != null && ASOF_EL) ASOF_EL.textContent = fmtStamp(lastAsOfMs);
   renderCandles(state);
   refreshTicker();
   setInterval(refreshTicker, 15000);

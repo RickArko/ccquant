@@ -103,4 +103,14 @@ def test_render_dashboard_html_includes_live_tape() -> None:
     assert "candlestick" in page
     assert "metric-latest" in page
     assert "Daily close" in page
-    assert "api.binance.com" in page
+    assert "data-api.binance.vision" in page
+    assert "America/Chicago" in page
+    assert "America/New_York" in page
+    assert 'data-tz="ny"' in page
+    assert 'data-tz="utc"' in page
+    assert 'data-tz="ct"' in page
+    # 12:00 UTC on 2026-07-19 is 07:00 CDT (default seed label)
+    assert 'id="live-asof">2026-07-19 07:00 CDT</span>' in page
+    assert "ccquant.liveTz" in page
+    assert "fetchBinanceKlines" in page
+    assert "fetchCoinbaseCandles" in page

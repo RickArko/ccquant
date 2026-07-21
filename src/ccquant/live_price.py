@@ -1,22 +1,26 @@
 """Near-live BTC price tape for the Market Tracker dashboard.
 
 Fetches Binance spot last/24h stats + short-interval OHLC klines at render
-time. Falls back to Coinbase public spot if Binance is unreachable
-(e.g. geo-block).
+time (tries public data-api host first — api.binance.com is often geo-blocked).
+Falls back to Coinbase public spot/candles if Binance is unreachable.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 import httpx
 
 LOGGER = logging.getLogger(__name__)
 
-BINANCE_API = "https://api.binance.com"
+BINANCE_HOSTS = (
+    "https://data-api.binance.vision",
+    "https://api.binance.com",
+    "https://api.binance.us",
+)
 COINBASE_SPOT = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
 COINBASE_CANDLES = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
 
@@ -26,7 +30,8 @@ LiveRange = Literal["1h", "1d", "7d"]
 _INTERVAL_SEC = {"1m": 60, "5m": 300, "15m": 900, "1h": 3_600}
 _RANGE_SEC = {"1h": 3_600, "1d": 86_400, "7d": 604_800}
 _COINBASE_GRANULARITY = {"1m": 60, "5m": 300, "15m": 900, "1h": 3_600}
-BINANCE_MAX_KLINES = 1000
+BINANCE_PAGE = 1000
+COINBASE_PAGE = 300
 
 
 @dataclass(frozen=True)
@@ -49,11 +54,10 @@ class LiveTape:
 
 
 def kline_limit(range_key: LiveRange, interval: LiveInterval) -> int:
-    """Bars to request for a range/interval pair (capped at Binance max)."""
+    """Bars needed for a range/interval pair (not capped — callers paginate)."""
     if range_key not in _RANGE_SEC or interval not in _INTERVAL_SEC:
         raise ValueError(f"unsupported range/interval {range_key!r}/{interval!r}")
-    n = max(1, int(_RANGE_SEC[range_key] / _INTERVAL_SEC[interval]))
-    return min(BINANCE_MAX_KLINES, n)
+    return max(1, int(_RANGE_SEC[range_key] / _INTERVAL_SEC[interval]))
 
 
 def _parse_binance_klines(
@@ -116,6 +120,29 @@ def fetch_live_tape(
             http.close()
 
 
+def _fetch_binance_page(
+    client: httpx.Client,
+    host: str,
+    *,
+    interval: LiveInterval,
+    limit: int,
+    end_time_ms: int | None,
+) -> list[list[object]]:
+    params: dict[str, str | int] = {
+        "symbol": "BTCUSDT",
+        "interval": interval,
+        "limit": limit,
+    }
+    if end_time_ms is not None:
+        params["endTime"] = end_time_ms
+    resp = client.get(f"{host}/api/v3/klines", params=params)
+    resp.raise_for_status()
+    rows = resp.json()
+    if not isinstance(rows, list):
+        raise TypeError(f"unexpected klines payload: {type(rows)!r}")
+    return rows
+
+
 def _fetch_binance(
     client: httpx.Client,
     *,
@@ -123,39 +150,70 @@ def _fetch_binance(
     range_key: LiveRange,
     limit: int,
 ) -> LiveTape:
-    ticker = client.get(
-        f"{BINANCE_API}/api/v3/ticker/24hr",
-        params={"symbol": "BTCUSDT"},
-    )
-    ticker.raise_for_status()
-    t = ticker.json()
-    last = float(t["lastPrice"])
-    change = float(t["priceChangePercent"]) / 100.0
-    high = float(t["highPrice"])
-    low = float(t["lowPrice"])
-    as_of = datetime.fromtimestamp(int(t["closeTime"]) / 1000, tz=UTC)
+    last_err: Exception | None = None
+    for host in BINANCE_HOSTS:
+        try:
+            ticker = client.get(
+                f"{host}/api/v3/ticker/24hr",
+                params={"symbol": "BTCUSDT"},
+            )
+            ticker.raise_for_status()
+            t = ticker.json()
+            last = float(t["lastPrice"])
+            change = float(t["priceChangePercent"]) / 100.0
+            high = float(t["highPrice"])
+            low = float(t["lowPrice"])
+            as_of = datetime.fromtimestamp(int(t["closeTime"]) / 1000, tz=UTC)
 
-    kl = client.get(
-        f"{BINANCE_API}/api/v3/klines",
-        params={"symbol": "BTCUSDT", "interval": interval, "limit": limit},
-    )
-    kl.raise_for_status()
-    times, opens, highs, lows, closes = _parse_binance_klines(kl.json())
-    return LiveTape(
-        last=last,
-        change_24h_pct=change,
-        high_24h=high,
-        low_24h=low,
-        as_of=as_of,
-        source="binance",
-        interval=interval,
-        range_key=range_key,
-        bar_times=times,
-        bar_opens=opens,
-        bar_highs=highs,
-        bar_lows=lows,
-        bar_closes=closes,
-    )
+            collected: list[list[object]] = []
+            end_time: int | None = None
+            while len(collected) < limit:
+                page = min(BINANCE_PAGE, limit - len(collected))
+                batch = _fetch_binance_page(
+                    client,
+                    host,
+                    interval=interval,
+                    limit=page,
+                    end_time_ms=end_time,
+                )
+                if not batch:
+                    break
+                collected = batch + collected
+                end_time = int(str(batch[0][0])) - 1
+                if len(batch) < page:
+                    break
+
+            if not collected:
+                raise RuntimeError(f"empty klines from {host}")
+
+            # Deduplicate + keep the most recent ``limit`` bars.
+            by_t: dict[int, list[object]] = {}
+            for row in collected:
+                by_t[int(str(row[0]))] = row
+            ordered = [by_t[k] for k in sorted(by_t)]
+            ordered = ordered[-limit:]
+            times, opens, highs, lows, closes = _parse_binance_klines(ordered)
+            source = host.removeprefix("https://")
+            return LiveTape(
+                last=last,
+                change_24h_pct=change,
+                high_24h=high,
+                low_24h=low,
+                as_of=as_of,
+                source=source,
+                interval=interval,
+                range_key=range_key,
+                bar_times=times,
+                bar_opens=opens,
+                bar_highs=highs,
+                bar_lows=lows,
+                bar_closes=closes,
+            )
+        except Exception as exc:
+            last_err = exc
+            LOGGER.debug("binance host %s failed: %s", host, exc)
+            continue
+    raise RuntimeError(f"all Binance hosts failed: {last_err}")
 
 
 def _fetch_coinbase(
@@ -170,19 +228,42 @@ def _fetch_coinbase(
     last = float(spot.json()["data"]["amount"])
 
     gran = _COINBASE_GRANULARITY[interval]
-    candles = client.get(
-        COINBASE_CANDLES,
-        params={"granularity": gran},
-        headers={"User-Agent": "ccquant/0.1"},
-    )
-    candles.raise_for_status()
-    # Coinbase returns [time, low, high, open, close, volume], newest first.
-    rows = list(reversed(candles.json()[:limit]))
-    times = tuple(datetime.fromtimestamp(int(r[0]), tz=UTC) for r in rows)
-    lows = tuple(float(r[1]) for r in rows)
-    highs = tuple(float(r[2]) for r in rows)
-    opens = tuple(float(r[3]) for r in rows)
-    closes = tuple(float(r[4]) for r in rows)
+    collected: list[list[object]] = []
+    end = datetime.now(tz=UTC)
+    while len(collected) < limit:
+        page = min(COINBASE_PAGE, limit - len(collected))
+        start = end - timedelta(seconds=page * gran)
+        candles = client.get(
+            COINBASE_CANDLES,
+            params={
+                "granularity": gran,
+                "start": start.isoformat().replace("+00:00", "Z"),
+                "end": end.isoformat().replace("+00:00", "Z"),
+            },
+            headers={"User-Agent": "ccquant/0.1"},
+        )
+        candles.raise_for_status()
+        batch = candles.json()
+        if not isinstance(batch, list) or not batch:
+            break
+        # Newest first from API; normalize oldest→newest for prepend.
+        batch_sorted = sorted(batch, key=lambda r: int(r[0]))
+        collected = batch_sorted + collected
+        end = datetime.fromtimestamp(int(batch_sorted[0][0]), tz=UTC) - timedelta(
+            seconds=gran
+        )
+        if len(batch) < page:
+            break
+
+    by_t: dict[int, list[object]] = {}
+    for row in collected:
+        by_t[int(str(row[0]))] = row
+    rows = [by_t[k] for k in sorted(by_t)][-limit:]
+    times = tuple(datetime.fromtimestamp(int(str(r[0])), tz=UTC) for r in rows)
+    lows = tuple(float(str(r[1])) for r in rows)
+    highs = tuple(float(str(r[2])) for r in rows)
+    opens = tuple(float(str(r[3])) for r in rows)
+    closes = tuple(float(str(r[4])) for r in rows)
     as_of = times[-1] if times else datetime.now(tz=UTC)
     return LiveTape(
         last=last,
