@@ -45,7 +45,11 @@ def fetch_blockchain_chart(
     *,
     timespan: str = "all",
 ) -> list[tuple[date, float]]:
-    """Fetch one blockchain.info chart as ``[(date, value), ...]``."""
+    """Fetch one blockchain.info chart as ``[(date, value), ...]``.
+
+    Returns an empty list when the payload shape is unexpected so a single
+    bad chart cannot abort the whole on-chain sync.
+    """
     url = f"{BC_API}/{chart}"
     for _attempt in range(2):
         resp = client.get(url, params={"timespan": timespan, "format": "json"})
@@ -53,7 +57,10 @@ def fetch_blockchain_chart(
             time.sleep(60)
             continue
         resp.raise_for_status()
-        payload = resp.json()
+        try:
+            payload = resp.json()
+        except ValueError:
+            return []
         vals = payload.get("values") if isinstance(payload, dict) else None
         if not isinstance(vals, list):
             return []
@@ -67,6 +74,7 @@ def fetch_blockchain_chart(
             except (TypeError, ValueError):
                 continue
         return out
+    return []
 
 
 def fetch_blockchain_info_points(
@@ -79,7 +87,8 @@ def fetch_blockchain_info_points(
     for chart, metric in BLOCKCHAIN_METRICS.items():
         try:
             rows = fetch_blockchain_chart(client, chart)
-        except httpx.HTTPError as exc:
+        except Exception as exc:
+            # HTTP failures and unexpected decode/runtime errors: skip chart.
             LOGGER.warning("blockchain.info %s failed: %s", chart, exc)
             time.sleep(delay_seconds)
             continue

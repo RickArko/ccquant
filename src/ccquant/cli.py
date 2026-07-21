@@ -373,10 +373,12 @@ def sync_all(
     5. Order-book depth snapshots (bps-band volume features)
     6. MEV sync (DEX prices + optional local MEV-Boost parquet)
     7. Macro sync (FRED series, if FRED_API_KEY is set)
-    8. Wallet intelligence sync (registry + history + tail)
-    9. Tweet import sync (inbox CSV/JSONL)
-    10. dbt snapshot (SCD2 snap_assets) then dbt build + test
-    11. Status table
+    8. On-chain fundamentals (blockchain.info + BID valuation if keyed)
+    9. ETF flows (Farside) + MSTR equity closes (Yahoo)
+    10. Wallet intelligence sync (registry + history + tail)
+    11. Tweet import sync (inbox CSV/JSONL)
+    12. dbt snapshot (SCD2 snap_assets) then dbt build + test
+    13. Status table
     """
     store, cfg = _load(config)
     try:
