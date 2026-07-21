@@ -42,7 +42,7 @@ def test_kline_limit_defaults() -> None:
 def test_intervals_for_range() -> None:
     assert INTERVALS_FOR_RANGE["1h"] == ("1m", "5m", "15m", "1h")
     assert INTERVALS_FOR_RANGE["1d"] == ("1h", "4h")
-    assert INTERVALS_FOR_RANGE["7d"] == ("4h", "1d")
+    assert INTERVALS_FOR_RANGE["7d"] == ("1h", "4h", "1d")
     assert DEFAULT_INTERVAL_FOR_RANGE["1d"] == "4h"
     assert DEFAULT_INTERVAL_FOR_RANGE["7d"] == "4h"
 

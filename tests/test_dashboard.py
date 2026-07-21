@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime, timedelta
 
 import polars as pl
@@ -141,9 +142,25 @@ def test_render_dashboard_html_contains_hero() -> None:
     assert 'id="lt-ind-sma"' in page
     assert 'id="lt-ind-pi"' in page
     assert 'id="lt-ind-larsson"' in page
+    assert 'id="lt-ind-clear"' in page
     assert "sma50" in page
     assert "pi350x2" in page
     assert "larsson_bull" in page
+    assert "view_start" in page
+    assert "rangeslider" in page
+    assert "syncDailyY" in page
+    assert "syncMonthlyY" in page
+    assert "bindDailyRelayout" in page
+    # Default viewport is ~2y when history is longer than that.
+    long_page = render_dashboard_html(
+        build_snapshot_from_panels(_synthetic_daily(n_days=1200))
+    )
+    seed = json.loads(
+        long_page.split('id="lt-seed">', 1)[1].split("</script>", 1)[0]
+    )
+    assert seed["view_start"] is not None
+    assert seed["dates"][0] < seed["view_start"]
+    assert seed["view_start"] < seed["dates"][-1]
     # Toggles default unchecked
     assert 'id="lt-ind-sma" checked' not in page
     assert 'id="lt-ind-pi" checked' not in page
@@ -190,5 +207,5 @@ def test_render_dashboard_html_includes_live_tape() -> None:
     assert "fetchBinanceKlines" in page
     assert "fetchCoinbaseCandles" in page
     assert '"1d":["1h","4h"]' in page or '"1d": ["1h", "4h"]' in page
-    assert '"7d":["4h","1d"]' in page or '"7d": ["4h", "1d"]' in page
+    assert '"7d":["1h","4h","1d"]' in page or '"7d": ["1h", "4h", "1d"]' in page
     assert "syncIntervalButtons" in page

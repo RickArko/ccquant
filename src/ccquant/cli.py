@@ -585,7 +585,7 @@ def dashboard(
             "--live-interval",
             help=(
                 "Initial candle size by range: "
-                "1h→1m/5m/15m/1h; 1d→1h/4h; 7d→4h/1d"
+                "1h→1m/5m/15m/1h; 1d→1h/4h; 7d→1h/4h/1d"
             ),
         ),
     ] = "5m",

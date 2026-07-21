@@ -49,7 +49,7 @@ _COINBASE_GRANULARITY = {
 INTERVALS_FOR_RANGE: dict[LiveRange, tuple[LiveInterval, ...]] = {
     "1h": ("1m", "5m", "15m", "1h"),
     "1d": ("1h", "4h"),
-    "7d": ("4h", "1d"),
+    "7d": ("1h", "4h", "1d"),
 }
 DEFAULT_INTERVAL_FOR_RANGE: dict[LiveRange, LiveInterval] = {
     "1h": "5m",

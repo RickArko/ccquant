@@ -33,8 +33,9 @@ from ccquant.live_price import (
 
 MOM_LOOKBACK = 12
 LIQ_LOOKBACK = 52
-# ~5y so SMA200 / Pi Cycle (350d) have enough warm-up on the long-term chart.
-CHART_LOOKBACK_DAYS = 1825
+# Default daily viewport (~2y). Full BTC history is still embedded so the
+# rangeslider can zoom out to the entire series (esp. useful on monthly).
+CHART_DEFAULT_VIEW_DAYS = 730
 STALE_WARN_DAYS = 3
 DASHBOARD_TZ = ZoneInfo("America/Chicago")
 # Trading-desk presets exposed in the live tape toolbar (default: Chicago).
@@ -538,11 +539,10 @@ def build_snapshot_from_panels(
     else:
         supporting = "Breadth is balanced; wait for confirmation."
 
-    chart_from = as_of - timedelta(days=CHART_LOOKBACK_DAYS)
     chart_cols = ["date", "open", "high", "low", "close"]
     if "volume" in btc.columns:
         chart_cols.append("volume")
-    chart = btc.filter(pl.col("date") >= chart_from).select(chart_cols)
+    chart = btc.select(chart_cols)
     if "volume" not in chart.columns:
         chart = chart.with_columns(pl.lit(0.0).alias("volume"))
     note = freshness_note or f"BTC daily through {as_of}"
@@ -836,9 +836,19 @@ def _long_term_indicator_seed(snapshot: MarketSnapshot) -> dict[str, object]:
     larsson = _larsson_states(ema30, ema60, atr60)
     latest_state = next((s for s in reversed(larsson) if s is not None), None)
 
+    view_start: str | None = None
+    if snapshot.btc_dates:
+        end = snapshot.btc_dates[-1]
+        target = end - timedelta(days=CHART_DEFAULT_VIEW_DAYS)
+        view_start = next(
+            (d.isoformat() for d in snapshot.btc_dates if d >= target),
+            dates[0],
+        )
+
     return {
         "dates": dates,
         "close": closes,
+        "view_start": view_start,
         "sma50": sma50,
         "sma200": sma200,
         "sma111": sma111,
@@ -922,13 +932,17 @@ def render_dashboard_html(
     )
     monthly_fig.update_layout(
         template="plotly_dark",
-        height=400,
-        margin=dict(l=48, r=24, t=36, b=36),
+        height=460,
+        margin=dict(l=48, r=24, t=36, b=24),
         title=dict(text="BTC monthly — candles + volume", font=dict(size=14)),
         showlegend=False,
         paper_bgcolor="#12141a",
         plot_bgcolor="#12141a",
+        # Candlestick defaults a top-axis slider; put it on the shared bottom
+        # axis so volume stays aligned and the full history is scrubbable.
         xaxis_rangeslider_visible=False,
+        xaxis2_rangeslider_visible=True,
+        xaxis2_rangeslider_thickness=0.08,
     )
     monthly_fig.update_yaxes(title_text="USD", type="log", row=1, col=1)
     monthly_fig.update_yaxes(title_text="Vol", row=2, col=1)
@@ -959,6 +973,8 @@ def render_dashboard_html(
           <label class="lt-ind" title="Larsson-style EMA30/60 + 0.3×ATR(60)">
             <input type="checkbox" id="lt-ind-larsson" /> Larsson Line
           </label>
+          <button type="button" class="live-btn lt-ind-clear" id="lt-ind-clear"
+                  title="Turn off all indicator overlays">Clear</button>
         </div>
         <span class="live-chart-label" id="lt-ind-status"></span>
       </div>
@@ -984,15 +1000,140 @@ def render_dashboard_html(
   if (typeof Plotly === "undefined") return;
 
   const seed = JSON.parse(seedEl.textContent);
+  let dailyReady = false;
+  let syncingDailyY = false;
+  let syncingMonthlyY = false;
+  let dailyRelayoutBound = false;
+
+  function dateKey(v) {
+    if (typeof v === "number" && Number.isFinite(v)) {
+      return new Date(v).toISOString().slice(0, 10);
+    }
+    const m = String(v).match(/(\\d{4}-\\d{2}-\\d{2})/);
+    return m ? m[1] : String(v);
+  }
+
+  function isXRelayout(ed) {
+    if (!ed) return true;
+    return Object.keys(ed).some(function (k) {
+      return k.indexOf("xaxis") === 0;
+    });
+  }
+
+  function resolveXRange(plot, ed) {
+    ed = ed || {};
+    if (ed["xaxis.autorange"] || ed["xaxis2.autorange"]) return null;
+    const a0 = ed["xaxis.range[0]"] != null
+      ? ed["xaxis.range[0]"]
+      : ed["xaxis2.range[0]"];
+    const a1 = ed["xaxis.range[1]"] != null
+      ? ed["xaxis.range[1]"]
+      : ed["xaxis2.range[1]"];
+    if (a0 != null && a1 != null) return [a0, a1];
+    if (ed["xaxis.range"]) return ed["xaxis.range"];
+    if (ed["xaxis2.range"]) return ed["xaxis2.range"];
+    if (ed["xaxis.rangeslider.range"]) return ed["xaxis.rangeslider.range"];
+    if (ed["xaxis2.rangeslider.range"]) return ed["xaxis2.rangeslider.range"];
+    const lay = plot.layout || {};
+    const xa = lay.xaxis || {};
+    const xa2 = lay.xaxis2 || {};
+    if (xa.range && xa.range.length === 2) return xa.range;
+    if (xa2.range && xa2.range.length === 2) return xa2.range;
+    return null;
+  }
+
+  function padLogRange(lo, hi) {
+    if (!(lo > 0) || !(hi > 0)) return null;
+    if (hi < lo) { const tmp = lo; lo = hi; hi = tmp; }
+    if (hi === lo) return [lo / 1.05, hi * 1.05];
+    const pad = Math.pow(hi / lo, 0.08);
+    return [lo / pad, hi * pad];
+  }
+
+  // Plotly log-axis range is in log10 units.
+  function logAxisRange(lo, hi) {
+    const padded = padLogRange(lo, hi);
+    if (!padded) return null;
+    return [Math.log10(padded[0]), Math.log10(padded[1])];
+  }
+
+  function visibleSeries() {
+    const series = [seed.close];
+    if (smaCb && smaCb.checked) {
+      series.push(seed.sma50, seed.sma200);
+    }
+    if (piCb && piCb.checked) {
+      series.push(seed.sma111, seed.pi350x2);
+    }
+    if (larssonCb && larssonCb.checked) {
+      series.push(
+        seed.ema60, seed.larsson_bull, seed.larsson_bear, seed.larsson_neutral
+      );
+    }
+    return series;
+  }
+
+  function dailyYBounds(x0, x1) {
+    const dates = seed.dates || [];
+    if (!dates.length) return null;
+    const d0 = x0 == null ? null : dateKey(x0);
+    const d1 = x1 == null ? null : dateKey(x1);
+    let lo = Infinity;
+    let hi = -Infinity;
+    const series = visibleSeries();
+    for (let i = 0; i < dates.length; i++) {
+      const d = dateKey(dates[i]);
+      if (d0 != null && d < d0) continue;
+      if (d1 != null && d > d1) continue;
+      for (let s = 0; s < series.length; s++) {
+        const v = series[s][i];
+        if (typeof v === "number" && Number.isFinite(v) && v > 0) {
+          if (v < lo) lo = v;
+          if (v > hi) hi = v;
+        }
+      }
+    }
+    if (!(lo < Infinity && hi > -Infinity)) return null;
+    return logAxisRange(lo, hi);
+  }
+
+  function defaultXWindow() {
+    if (seed.view_start && seed.dates && seed.dates.length) {
+      return [seed.view_start, seed.dates[seed.dates.length - 1]];
+    }
+    return null;
+  }
 
   function layout() {
+    const xaxis = {
+      title: "Date",
+      type: "date",
+      rangeslider: { visible: true, thickness: 0.08 }
+    };
+    const yaxis = {
+      title: "USD",
+      type: "log",
+      fixedrange: false,
+      autorange: true
+    };
+    // Initial ~2y window + matching y-range so first paint is never blank.
+    const xw = !dailyReady ? defaultXWindow() : null;
+    if (xw) {
+      xaxis.range = xw;
+      const yb = dailyYBounds(xw[0], xw[1]);
+      if (yb) {
+        yaxis.autorange = false;
+        yaxis.range = yb;
+      }
+    }
     return {
       template: "plotly_dark",
-      height: 360,
-      margin: { l: 48, r: 24, t: 36, b: 36 },
+      height: 420,
+      margin: { l: 48, r: 24, t: 36, b: 24 },
       title: { text: "BTC close (log) — market view", font: { size: 14 } },
-      yaxis: { title: "USD", type: "log" },
-      xaxis: { title: "Date" },
+      yaxis: yaxis,
+      xaxis: xaxis,
+      uirevision: "lt-daily",
       showlegend: true,
       legend: {
         orientation: "h", y: 1.12, x: 0, font: { size: 10, color: "#9a958c" }
@@ -1001,6 +1142,28 @@ def render_dashboard_html(
       plot_bgcolor: "#12141a",
       font: { color: "#e8e6e1" }
     };
+  }
+
+  function syncDailyY(ed) {
+    if (syncingDailyY || !isXRelayout(ed)) return;
+    const xr = resolveXRange(plotEl, ed) || defaultXWindow();
+    const bounds = xr ? dailyYBounds(xr[0], xr[1]) : dailyYBounds(null, null);
+    if (!bounds) return;
+    syncingDailyY = true;
+    Plotly.relayout(plotEl, {
+      "yaxis.type": "log",
+      "yaxis.autorange": false,
+      "yaxis.range": bounds
+    }).then(
+      function () { syncingDailyY = false; },
+      function () { syncingDailyY = false; }
+    );
+  }
+
+  function bindDailyRelayout() {
+    if (dailyRelayoutBound || typeof plotEl.on !== "function") return;
+    plotEl.on("plotly_relayout", syncDailyY);
+    dailyRelayoutBound = true;
   }
 
   function buildTraces() {
@@ -1102,14 +1265,86 @@ def render_dashboard_html(
   }
 
   function renderDaily() {
-    Plotly.react(plotEl, buildTraces(), layout(), {
+    const p = Plotly.react(plotEl, buildTraces(), layout(), {
       displayModeBar: false, responsive: true
     });
+    Promise.resolve(p).then(function () {
+      dailyReady = true;
+      bindDailyRelayout();
+      syncDailyY({});
+    });
+  }
+
+  function syncMonthlyY(ed) {
+    if (syncingMonthlyY || !isXRelayout(ed)) return;
+    const mPlot = monthly.querySelector(".js-plotly-plot");
+    if (!mPlot || !mPlot.data) return;
+    const candle = mPlot.data.find(function (t) {
+      return t.type === "candlestick";
+    });
+    const volume = mPlot.data.find(function (t) {
+      return t.type === "bar";
+    });
+    if (!candle || !candle.x) return;
+    const xr = resolveXRange(mPlot, ed);
+    const d0 = xr ? dateKey(xr[0]) : null;
+    const d1 = xr ? dateKey(xr[1]) : null;
+    let lo = Infinity;
+    let hi = -Infinity;
+    let volHi = 0;
+    for (let i = 0; i < candle.x.length; i++) {
+      const d = dateKey(candle.x[i]);
+      if (d0 != null && d < d0) continue;
+      if (d1 != null && d > d1) continue;
+      const vals = [candle.low[i], candle.high[i], candle.open[i], candle.close[i]];
+      for (let j = 0; j < vals.length; j++) {
+        const v = vals[j];
+        if (typeof v === "number" && Number.isFinite(v) && v > 0) {
+          if (v < lo) lo = v;
+          if (v > hi) hi = v;
+        }
+      }
+      if (volume && typeof volume.y[i] === "number" && volume.y[i] > volHi) {
+        volHi = volume.y[i];
+      }
+    }
+    const priceRange = logAxisRange(lo, hi);
+    if (!priceRange) return;
+    const update = {
+      "yaxis.type": "log",
+      "yaxis.autorange": false,
+      "yaxis.range": priceRange
+    };
+    if (volHi > 0) {
+      update["yaxis2.autorange"] = false;
+      update["yaxis2.range"] = [0, volHi * 1.12];
+    }
+    syncingMonthlyY = true;
+    Plotly.relayout(mPlot, update).then(
+      function () { syncingMonthlyY = false; },
+      function () { syncingMonthlyY = false; }
+    );
   }
 
   [smaCb, piCb, larssonCb].forEach(function (el) {
     if (el) el.addEventListener("change", renderDaily);
   });
+
+  const clearBtn = document.getElementById("lt-ind-clear");
+  if (clearBtn) {
+    clearBtn.addEventListener("click", function () {
+      [smaCb, piCb, larssonCb].forEach(function (el) {
+        if (el) el.checked = false;
+      });
+      renderDaily();
+    });
+  }
+
+  // Monthly plot is already initialized by Plotly.newPlot in the embed.
+  const monthlyPlot = monthly.querySelector(".js-plotly-plot");
+  if (monthlyPlot && typeof monthlyPlot.on === "function") {
+    monthlyPlot.on("plotly_relayout", syncMonthlyY);
+  }
 
   modes.querySelectorAll(".live-btn").forEach(function (btn) {
     btn.addEventListener("click", function () {
@@ -1127,11 +1362,13 @@ def render_dashboard_html(
         pane.querySelectorAll(".js-plotly-plot").forEach(function (el) {
           try { Plotly.Plots.resize(el); } catch (err) {}
         });
-        if (!showMonthly) renderDaily();
+        if (showMonthly) syncMonthlyY({});
+        else renderDaily();
       }
     });
   });
 
+  // Bind daily relayout only after Plotly.react — .on does not exist on a bare div.
   renderDaily();
 })();
 </script>
@@ -1903,7 +2140,7 @@ def render_dashboard_html(
     }}
     .lt-daily-plot {{
       width: 100%;
-      min-height: 360px;
+      min-height: 420px;
       background: #12141a;
     }}
     .lt-pane[hidden] {{ display: none !important; }}
