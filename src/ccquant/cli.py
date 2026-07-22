@@ -184,6 +184,40 @@ def sync_macro(
         console.print(f"  {series_id}: {count}")
 
 
+@sync_app.command("onchain")
+def sync_onchain(
+    config: str | None = typer.Option(None, "--config", "-c"),
+) -> None:
+    """Fetch BTC on-chain fundamentals (blockchain.info) + BID valuation."""
+    store, cfg = _load(config)
+    syncer = MarketSync(store, cfg)
+    try:
+        results = syncer.sync_onchain()
+    finally:
+        store.close()
+    total = sum(results.values())
+    console.print(f"[green]On-chain sync complete: {total} points[/green]")
+    for source, count in sorted(results.items()):
+        console.print(f"  {source}: {count}")
+
+
+@sync_app.command("etf")
+def sync_etf(
+    config: str | None = typer.Option(None, "--config", "-c"),
+) -> None:
+    """Fetch US spot BTC ETF flows (Farside) + MSTR equity closes (Yahoo)."""
+    store, cfg = _load(config)
+    syncer = MarketSync(store, cfg)
+    try:
+        results = syncer.sync_etf_mstr()
+    finally:
+        store.close()
+    total = sum(results.values())
+    console.print(f"[green]ETF/MSTR sync complete: {total} points[/green]")
+    for source, count in sorted(results.items()):
+        console.print(f"  {source}: {count}")
+
+
 @sync_app.command("depth")
 def sync_depth(
     config: str | None = typer.Option(None, "--config", "-c"),
@@ -318,8 +352,18 @@ def sync_all(
     mev: bool = typer.Option(
         True, "--mev/--no-mev", help="Sync DEX prices + local MEV-Boost import"
     ),
+    onchain: bool = typer.Option(
+        True,
+        "--onchain/--no-onchain",
+        help="Sync BTC on-chain fundamentals (+ BID valuation if keyed)",
+    ),
+    etf: bool = typer.Option(
+        True,
+        "--etf/--no-etf",
+        help="Sync US spot BTC ETF flows (Farside) + MSTR closes",
+    ),
 ) -> None:
-    """Sync universe, OHLCV, OI, depth, MEV, macro, wallets, tweets, then dbt.
+    """Sync universe, OHLCV, OI, depth, MEV, macro, onchain, ETF/MSTR, then dbt.
 
     One command to bring the local DB up to today. Runs:
     1. Universe refresh (top-cap rankings + exchange pair probes)
@@ -329,10 +373,12 @@ def sync_all(
     5. Order-book depth snapshots (bps-band volume features)
     6. MEV sync (DEX prices + optional local MEV-Boost parquet)
     7. Macro sync (FRED series, if FRED_API_KEY is set)
-    8. Wallet intelligence sync (registry + history + tail)
-    9. Tweet import sync (inbox CSV/JSONL)
-    10. dbt snapshot (SCD2 snap_assets) then dbt build + test
-    11. Status table
+    8. On-chain fundamentals (blockchain.info + BID valuation if keyed)
+    9. ETF flows (Farside) + MSTR equity closes (Yahoo)
+    10. Wallet intelligence sync (registry + history + tail)
+    11. Tweet import sync (inbox CSV/JSONL)
+    12. dbt snapshot (SCD2 snap_assets) then dbt build + test
+    13. Status table
     """
     store, cfg = _load(config)
     try:
@@ -404,7 +450,27 @@ def sync_all(
 
         asyncio.run(run())
 
-        # 6. Wallet intelligence
+        # 8. On-chain fundamentals (+ BID valuation when keyed)
+        if onchain:
+            console.print("\n[dim]On-chain (blockchain.info / BID)...[/dim]")
+            oc_results = MarketSync(store, cfg).sync_onchain()
+            console.print(
+                f"[green]On-chain: {sum(oc_results.values())} points[/green]"
+            )
+            for src, n in sorted(oc_results.items()):
+                console.print(f"  {src}: {n}")
+
+        # 9. ETF flows + MSTR
+        if etf:
+            console.print("\n[dim]ETF flows + MSTR...[/dim]")
+            etf_results = MarketSync(store, cfg).sync_etf_mstr()
+            console.print(
+                f"[green]ETF/MSTR: {sum(etf_results.values())} points[/green]"
+            )
+            for src, n in sorted(etf_results.items()):
+                console.print(f"  {src}: {n}")
+
+        # 10. Wallet intelligence
         if wallets and cfg.wallet_tracking.enabled:
             console.print("\n[dim]Wallet intelligence...[/dim]")
             wallet_syncer = WalletSync(store, cfg)
@@ -502,6 +568,86 @@ def status(config: str | None = typer.Option(None, "--config", "-c")) -> None:
         store.close()
 
 
+@app.command("dashboard")
+def dashboard(
+    config: str | None = typer.Option(None, "--config", "-c"),
+    out: Annotated[Path, typer.Option("--out", help="HTML output path")] = Path(
+        "data/export/market_tracker.html"
+    ),
+    open_browser: bool = typer.Option(
+        True,
+        "--open/--no-open",
+        help="Open the HTML file in the default browser",
+    ),
+    live_interval: Annotated[
+        str,
+        typer.Option(
+            "--live-interval",
+            help=(
+                "Initial candle size by range: "
+                "1h→1m/5m/15m/1h; 1d→1h/4h; 7d→1h/4h/1d"
+            ),
+        ),
+    ] = "5m",
+    live_range: Annotated[
+        str,
+        typer.Option(
+            "--live-range",
+            help="Initial live chart window: 1h, 1d, or 7d (default 1h)",
+        ),
+    ] = "1h",
+    live: bool = typer.Option(
+        True,
+        "--live/--no-live",
+        help="Include near-live BTC tape (Binance → Coinbase)",
+    ),
+) -> None:
+    """Write a single-page Market Tracker HTML dashboard (no server)."""
+    import webbrowser
+    from typing import cast
+
+    from ccquant.dashboard import write_dashboard
+    from ccquant.live_price import (
+        DEFAULT_INTERVAL_FOR_RANGE,
+        INTERVALS_FOR_RANGE,
+        LiveInterval,
+        LiveRange,
+    )
+
+    if live_range not in {"1h", "1d", "7d"}:
+        raise typer.BadParameter("live-range must be 1h, 1d, or 7d")
+    range_key = cast(LiveRange, live_range)
+    allowed = INTERVALS_FOR_RANGE[range_key]
+    if live_interval not in allowed:
+        live_interval = DEFAULT_INTERVAL_FOR_RANGE[range_key]
+
+    cfg = load_config(config)
+    try:
+        path = write_dashboard(
+            cfg.database,
+            out,
+            live_interval=cast(LiveInterval, live_interval),
+            live_range=range_key,
+            include_live=live,
+        )
+    except ImportError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"[green]Dashboard written:[/green] {path}")
+    console.print(f"[dim]{path.as_uri()}[/dim]")
+    if live:
+        console.print(
+            f"[dim]Live tape: {live_range} · {live_interval} candles "
+            f"(ticker 15s / candles 60s; range & interval switchable in page)[/dim]"
+        )
+    if open_browser:
+        webbrowser.open(path.as_uri())
+
+
 @export_app.command("parquet")
 def export_parquet(
     config: str | None = typer.Option(None, "--config", "-c"),
@@ -530,6 +676,8 @@ def _export(config: str | None, out: Path, *, fmt: str) -> None:
             "sync_state",
             "onchain_series",
             "onchain_sync_state",
+            "etf_flows_daily",
+            "equity_daily",
             "open_interest",
             "order_book_snapshots",
             "order_book_sync_state",

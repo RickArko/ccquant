@@ -88,6 +88,10 @@ warn_return_any = true
 module = ["google.*", "google.cloud.*", "google.cloud.bigquery.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["plotly", "plotly.*"]
+ignore_missing_imports = true
+
 # Installed by default on `uv sync` (omit with `uv sync --no-dev`).
 # Lint/test + notebooks + forecast libs so pre-commit hooks and VS Code kernels work.
 [dependency-groups]

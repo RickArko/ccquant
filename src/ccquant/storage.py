@@ -10,6 +10,8 @@ from ccquant.models import (
     Asset,
     DailyOhlcv,
     DexPriceDaily,
+    EquityDaily,
+    EtfFlowPoint,
     HourlyOhlcv,
     MacroPoint,
     MevBoostPayload,
@@ -129,6 +131,28 @@ class MarketStore:
               latest_at varchar,
               last_refresh_at timestamp,
               primary key (metric, source)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists etf_flows_daily (
+              date date not null,
+              ticker varchar not null,
+              net_flow_usd_m double not null,
+              source varchar not null,
+              primary key (date, ticker, source)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            create table if not exists equity_daily (
+              symbol varchar not null,
+              date date not null,
+              close double not null,
+              source varchar not null,
+              primary key (symbol, date, source)
             )
             """
         )
@@ -656,6 +680,43 @@ class MarketStore:
                   value = excluded.value
                 """,
                 [point.metric, point.date, point.value, point.source],
+            )
+        return len(points)
+
+    def upsert_etf_flows(self, points: list[EtfFlowPoint]) -> int:
+        for point in points:
+            self._conn.execute(
+                """
+                insert into etf_flows_daily (
+                  date, ticker, net_flow_usd_m, source
+                ) values (?, ?, ?, ?)
+                on conflict (date, ticker, source) do update set
+                  net_flow_usd_m = excluded.net_flow_usd_m
+                """,
+                [
+                    point.date,
+                    point.ticker.upper(),
+                    point.net_flow_usd_m,
+                    point.source,
+                ],
+            )
+        return len(points)
+
+    def upsert_equity_daily(self, points: list[EquityDaily]) -> int:
+        for point in points:
+            self._conn.execute(
+                """
+                insert into equity_daily (symbol, date, close, source)
+                values (?, ?, ?, ?)
+                on conflict (symbol, date, source) do update set
+                  close = excluded.close
+                """,
+                [
+                    point.symbol.upper(),
+                    point.date,
+                    point.close,
+                    point.source,
+                ],
             )
         return len(points)
 

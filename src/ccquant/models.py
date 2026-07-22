@@ -136,6 +136,26 @@ class MacroPoint:
 
 
 @dataclass(frozen=True)
+class EtfFlowPoint:
+    """US spot ETF daily net flow in USD millions (Farside convention)."""
+
+    date: date
+    ticker: str
+    net_flow_usd_m: float
+    source: str
+
+
+@dataclass(frozen=True)
+class EquityDaily:
+    """Listed equity daily close (e.g. MSTR)."""
+
+    symbol: str
+    date: date
+    close: float
+    source: str
+
+
+@dataclass(frozen=True)
 class WalletRegistryEntry:
     address: str
     chain: str

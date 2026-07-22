@@ -122,6 +122,30 @@ uv run python -m ipykernel install --user --name=ccquant --display-name="Python 
 In **VS Code / Cursor**: open the `.ipynb` → kernel picker → choose
 `.venv` / **Python (ccquant)**. In a terminal: `uv run jupyter lab notebooks/`.
 
+### Market Tracker (`Market_Tracker.ipynb` + HTML dashboard)
+
+Fast research surface for **where the market is** (BTC snapshot, universe
+breadth, OI, macro/on-chain regime labels, sync freshness) and **where regimes
+suggest it may go** (stacked score + historical BTC forward returns in similar
+stacks + rule-based outlook). Reads `mart_signals_daily` / `fct_ohlcv_daily` via
+forecasting loaders; deep forecast fans stay in `BTC.ipynb` / `Macro.ipynb` /
+`OnChain_BTC.ipynb`. Degrades with `[MISSING]` when domains are empty.
+
+Single-page UI (no server) — brand, headline, key metrics, one BTC chart,
+regime strip, outlook:
+
+```bash
+uv run ccquant sync onchain               # blockchain.info fundamentals (+ BID if keyed)
+uv run ccquant sync etf                   # Farside US spot BTC ETF flows + Yahoo MSTR
+uv run dbt build --select fct_onchain_signals+ --project-dir dbt --profiles-dir dbt
+uv run ccquant dashboard                  # writes data/export/market_tracker.html + opens
+uv run ccquant dashboard --no-open --out data/export/market_tracker.html
+```
+
+Dashboard chips include on-chain regime plus an **ETF/MSTR demand** health
+indicator (7d Farside net flow + MSTR vs BTC 20d relative strength). Renew
+`BITCOIN_IS_DATA_KEY` for full MVRV/NUPL history (subscription currently required).
+
 ### BTC Long-Term Price Forecast (`BTC.ipynb`)
 
 Cointegrating OLS (log BTC ~ time + M2 + hashrate + halving cycle) with HAC
