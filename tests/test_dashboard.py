@@ -126,6 +126,24 @@ def test_larsson_states() -> None:
     assert states == [None, "bull", "bear", "neutral"]
 
 
+def test_larsson_regime_bands_collapses_runs() -> None:
+    from ccquant.dashboard import _larsson_regime_bands
+
+    dates = [
+        "2024-01-01",
+        "2024-01-02",
+        "2024-01-03",
+        "2024-01-04",
+        "2024-01-05",
+    ]
+    states: list[str | None] = [None, "bull", "bull", "bear", "neutral"]
+    bands = _larsson_regime_bands(dates, states, bar="daily")
+    assert bands == [
+        {"start": "2024-01-02", "end": "2024-01-04", "state": "bull"},
+        {"start": "2024-01-04", "end": "2024-01-05", "state": "bear"},
+    ]
+
+
 def test_render_dashboard_html_contains_hero() -> None:
     pytest.importorskip("plotly")
     # Need warm-up length for SMA350 / Pi Cycle seed series.
@@ -146,6 +164,9 @@ def test_render_dashboard_html_contains_hero() -> None:
     assert "sma50" in page
     assert "pi350x2" in page
     assert "larsson_bull" in page
+    assert "larsson_bands" in page
+    assert "monthly_larsson" in page
+    assert "larssonShapes" in page
     assert "view_start" in page
     assert "rangeslider" in page
     assert "syncDailyY" in page

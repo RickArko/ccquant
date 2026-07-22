@@ -815,6 +815,74 @@ def _mask_by_state(
     return [v if s == want else None for v, s in zip(values, states, strict=True)]
 
 
+def _exclusive_band_end(dates: list[str], end_idx: int, *, bar: str) -> str:
+    """Exclusive ``x1`` for a regime band ending at ``end_idx`` (inclusive)."""
+    nxt = end_idx + 1
+    if nxt < len(dates):
+        return dates[nxt]
+    last = date.fromisoformat(dates[end_idx])
+    if bar == "monthly":
+        if last.month == 12:
+            return date(last.year + 1, 1, 1).isoformat()
+        return date(last.year, last.month + 1, 1).isoformat()
+    return (last + timedelta(days=1)).isoformat()
+
+
+def _larsson_regime_bands(
+    dates: list[str],
+    states: list[str | None],
+    *,
+    bar: str = "daily",
+) -> list[dict[str, str]]:
+    """Collapse consecutive bull/bear states into shaded ``[start, end)`` bands."""
+    bands: list[dict[str, str]] = []
+    i = 0
+    n = len(dates)
+    while i < n:
+        state = states[i]
+        if state not in ("bull", "bear"):
+            i += 1
+            continue
+        j = i + 1
+        while j < n and states[j] == state:
+            j += 1
+        bands.append(
+            {
+                "start": dates[i],
+                "end": _exclusive_band_end(dates, j - 1, bar=bar),
+                "state": state,
+            }
+        )
+        i = j
+    return bands
+
+
+def _larsson_series(
+    dates: list[str],
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    *,
+    bar: str = "daily",
+) -> dict[str, object]:
+    """EMA30/60 + ATR regime series and gold/blue shade bands for one bar size."""
+    ema30 = _ema(closes, 30)
+    ema60 = _ema(closes, 60)
+    atr60 = _atr(highs, lows, closes, 60)
+    states = _larsson_states(ema30, ema60, atr60)
+    latest = next((s for s in reversed(states) if s is not None), None)
+    return {
+        "dates": dates,
+        "ema30": ema30,
+        "ema60": ema60,
+        "larsson_bull": _mask_by_state(ema30, states, "bull"),
+        "larsson_bear": _mask_by_state(ema30, states, "bear"),
+        "larsson_neutral": _mask_by_state(ema30, states, "neutral"),
+        "larsson_state": latest,
+        "larsson_bands": _larsson_regime_bands(dates, states, bar=bar),
+    }
+
+
 def _long_term_indicator_seed(snapshot: MarketSnapshot) -> dict[str, object]:
     """Build JSON-serializable series for the daily long-term chart toggles."""
     dates = [d.isoformat() for d in snapshot.btc_dates]
@@ -830,11 +898,23 @@ def _long_term_indicator_seed(snapshot: MarketSnapshot) -> dict[str, object]:
     golden_x, golden_y, death_x, death_y = _cross_events(dates, sma50, sma200)
     pi_up_x, pi_up_y, _, _ = _cross_events(dates, sma111, pi_double)
 
-    ema30 = _ema(closes, 30)
-    ema60 = _ema(closes, 60)
-    atr60 = _atr(highs, lows, closes, 60)
-    larsson = _larsson_states(ema30, ema60, atr60)
-    latest_state = next((s for s in reversed(larsson) if s is not None), None)
+    larsson = _larsson_series(dates, highs, lows, closes, bar="daily")
+
+    m_dates, _mo, m_h, m_l, m_c, _mv = _monthly_ohlcv(
+        snapshot.btc_dates,
+        snapshot.btc_opens,
+        snapshot.btc_highs,
+        snapshot.btc_lows,
+        snapshot.btc_closes,
+        snapshot.btc_volumes,
+    )
+    monthly_larsson = _larsson_series(
+        [d.isoformat() for d in m_dates],
+        list(m_h),
+        list(m_l),
+        list(m_c),
+        bar="monthly",
+    )
 
     view_start: str | None = None
     if snapshot.btc_dates:
@@ -859,12 +939,14 @@ def _long_term_indicator_seed(snapshot: MarketSnapshot) -> dict[str, object]:
         "death_y": death_y,
         "pi_top_x": pi_up_x,
         "pi_top_y": pi_up_y,
-        "ema30": ema30,
-        "ema60": ema60,
-        "larsson_bull": _mask_by_state(ema30, larsson, "bull"),
-        "larsson_bear": _mask_by_state(ema30, larsson, "bear"),
-        "larsson_neutral": _mask_by_state(ema30, larsson, "neutral"),
-        "larsson_state": latest_state,
+        "ema30": larsson["ema30"],
+        "ema60": larsson["ema60"],
+        "larsson_bull": larsson["larsson_bull"],
+        "larsson_bear": larsson["larsson_bear"],
+        "larsson_neutral": larsson["larsson_neutral"],
+        "larsson_state": larsson["larsson_state"],
+        "larsson_bands": larsson["larsson_bands"],
+        "monthly_larsson": monthly_larsson,
     }
 
 
@@ -970,7 +1052,8 @@ def render_dashboard_html(
           <label class="lt-ind" title="Pi Cycle Top: 111 DMA vs 2×350 DMA">
             <input type="checkbox" id="lt-ind-pi" /> Pi Cycle
           </label>
-          <label class="lt-ind" title="Larsson-style EMA30/60 + 0.3×ATR(60)">
+          <label class="lt-ind"
+                 title="Larsson EMA30/60 + ATR band; gold bull / blue bear">
             <input type="checkbox" id="lt-ind-larsson" /> Larsson Line
           </label>
           <button type="button" class="live-btn lt-ind-clear" id="lt-ind-clear"
@@ -1104,6 +1187,42 @@ def render_dashboard_html(
     return null;
   }
 
+  function larssonShapes(bands, yref) {
+    if (!bands || !bands.length) return [];
+    return bands.map(function (b) {
+      const bull = b.state === "bull";
+      return {
+        type: "rect",
+        xref: "x",
+        yref: yref || "y domain",
+        x0: b.start,
+        x1: b.end,
+        y0: 0,
+        y1: 1,
+        fillcolor: bull ? "rgba(212,175,55,0.16)" : "rgba(93,173,226,0.16)",
+        line: { width: 0 },
+        layer: "below"
+      };
+    });
+  }
+
+  function updateLarssonStatus(series) {
+    if (!statusEl) return;
+    const showSma = !!(smaCb && smaCb.checked);
+    const showPi = !!(piCb && piCb.checked);
+    const showLarsson = !!(larssonCb && larssonCb.checked);
+    const bits = [];
+    if (showSma) bits.push("50/200 SMA");
+    if (showPi) bits.push("Pi Cycle");
+    if (showLarsson) {
+      const st = series && series.larsson_state ? series.larsson_state : null;
+      bits.push(st ? ("Larsson: " + st) : "Larsson Line");
+    }
+    statusEl.textContent = bits.length
+      ? bits.join(" · ")
+      : "long-term market view";
+  }
+
   function layout() {
     const xaxis = {
       title: "Date",
@@ -1126,6 +1245,7 @@ def render_dashboard_html(
         yaxis.range = yb;
       }
     }
+    const showLarsson = !!(larssonCb && larssonCb.checked);
     return {
       template: "plotly_dark",
       height: 420,
@@ -1133,6 +1253,7 @@ def render_dashboard_html(
       title: { text: "BTC close (log) — market view", font: { size: 14 } },
       yaxis: yaxis,
       xaxis: xaxis,
+      shapes: showLarsson ? larssonShapes(seed.larsson_bands, "y domain") : [],
       uirevision: "lt-daily",
       showlegend: true,
       legend: {
@@ -1248,20 +1369,72 @@ def render_dashboard_html(
         line: { color: "#95a5a6", width: 2.2 }
       });
     }
-    if (statusEl) {
-      const bits = [];
-      if (showSma) bits.push("50/200 SMA");
-      if (showPi) bits.push("Pi Cycle");
-      if (showLarsson && seed.larsson_state) {
-        bits.push("Larsson: " + seed.larsson_state);
-      } else if (showLarsson) {
-        bits.push("Larsson Line");
-      }
-      statusEl.textContent = bits.length
-        ? bits.join(" · ")
-        : "long-term market view";
-    }
+    updateLarssonStatus(seed);
     return traces;
+  }
+
+  function monthlyLarssonTraces() {
+    const ml = seed.monthly_larsson;
+    if (!ml || !ml.dates) return [];
+    return [
+      {
+        type: "scatter", mode: "lines", name: "EMA 60",
+        x: ml.dates, y: ml.ema60,
+        line: { color: "#7f8c8d", width: 1.2, dash: "dash" },
+        xaxis: "x", yaxis: "y"
+      },
+      {
+        type: "scatter", mode: "lines", name: "Larsson bull",
+        x: ml.dates, y: ml.larsson_bull, connectgaps: false,
+        line: { color: "#d4af37", width: 2.6 },
+        xaxis: "x", yaxis: "y"
+      },
+      {
+        type: "scatter", mode: "lines", name: "Larsson bear",
+        x: ml.dates, y: ml.larsson_bear, connectgaps: false,
+        line: { color: "#5dade2", width: 2.6 },
+        xaxis: "x", yaxis: "y"
+      },
+      {
+        type: "scatter", mode: "lines", name: "Larsson wait",
+        x: ml.dates, y: ml.larsson_neutral, connectgaps: false,
+        line: { color: "#95a5a6", width: 2.2 },
+        xaxis: "x", yaxis: "y"
+      }
+    ];
+  }
+
+  function applyMonthlyLarsson() {
+    const mPlot = monthly.querySelector(".js-plotly-plot");
+    if (!mPlot || !mPlot.data) return;
+    const show = !!(larssonCb && larssonCb.checked);
+    const ml = seed.monthly_larsson || {};
+    // Drop prior Larsson overlays (keep candles + volume).
+    const keep = [];
+    const drop = [];
+    mPlot.data.forEach(function (t, i) {
+      const n = t.name || "";
+      if (n.indexOf("Larsson") === 0 || n === "EMA 60") drop.push(i);
+      else keep.push(i);
+    });
+    const finish = function () {
+      const shapes = show ? larssonShapes(ml.larsson_bands, "y domain") : [];
+      Plotly.relayout(mPlot, { shapes: shapes });
+      if (show) {
+        Plotly.addTraces(mPlot, monthlyLarssonTraces());
+      }
+      updateLarssonStatus(show ? ml : seed);
+      syncMonthlyY({});
+    };
+    if (drop.length) {
+      Plotly.deleteTraces(mPlot, drop).then(finish, finish);
+    } else {
+      finish();
+    }
+  }
+
+  function isMonthlyMode() {
+    return !monthly.hidden;
   }
 
   function renderDaily() {
@@ -1326,17 +1499,35 @@ def render_dashboard_html(
     );
   }
 
+  function setMonthlyIndicatorChrome(showMonthly) {
+    // SMA / Pi are daily-only; Larsson recomputes on monthly bars.
+    [smaCb, piCb].forEach(function (el) {
+      if (!el || !el.parentElement) return;
+      el.parentElement.style.opacity = showMonthly ? "0.35" : "1";
+      el.disabled = !!showMonthly;
+    });
+    if (larssonCb && larssonCb.parentElement) {
+      larssonCb.parentElement.style.opacity = "1";
+      larssonCb.disabled = false;
+    }
+  }
+
+  function onIndicatorChange() {
+    if (isMonthlyMode()) applyMonthlyLarsson();
+    else renderDaily();
+  }
+
   [smaCb, piCb, larssonCb].forEach(function (el) {
-    if (el) el.addEventListener("change", renderDaily);
+    if (el) el.addEventListener("change", onIndicatorChange);
   });
 
   const clearBtn = document.getElementById("lt-ind-clear");
   if (clearBtn) {
     clearBtn.addEventListener("click", function () {
       [smaCb, piCb, larssonCb].forEach(function (el) {
-        if (el) el.checked = false;
+        if (el && !el.disabled) el.checked = false;
       });
-      renderDaily();
+      onIndicatorChange();
     });
   }
 
@@ -1355,15 +1546,18 @@ def render_dashboard_html(
       const showMonthly = mode === "monthly";
       daily.hidden = showMonthly;
       monthly.hidden = !showMonthly;
-      const ind = document.getElementById("lt-indicators");
-      if (ind) ind.style.opacity = showMonthly ? "0.35" : "1";
+      setMonthlyIndicatorChrome(showMonthly);
       if (typeof Plotly !== "undefined") {
         const pane = showMonthly ? monthly : daily;
         pane.querySelectorAll(".js-plotly-plot").forEach(function (el) {
           try { Plotly.Plots.resize(el); } catch (err) {}
         });
-        if (showMonthly) syncMonthlyY({});
-        else renderDaily();
+        if (showMonthly) {
+          applyMonthlyLarsson();
+          syncMonthlyY({});
+        } else {
+          renderDaily();
+        }
       }
     });
   });
