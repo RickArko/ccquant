@@ -147,28 +147,37 @@ def fetch_bid_valuation_points(
     if not rows:
         return [], "error:empty"
 
-    df = pl.DataFrame(rows)
-    if "date" not in df.columns:
-        return [], "error:no_date"
+    # Keep Polars aggregation inside the status path so schema drift returns
+    # error:<msg> instead of crashing sync_onchain().
+    try:
+        df = pl.DataFrame(rows)
+        if "date" not in df.columns:
+            return [], "error:no_date"
 
-    daily = df.group_by("date").last().sort("date")
-    points: list[OnchainPoint] = []
-    for bid_col, metric in BID_COLUMN_MAP.items():
-        if bid_col not in daily.columns:
-            continue
-        for d, v in zip(daily["date"].to_list(), daily[bid_col].to_list(), strict=True):
-            if v is None or (isinstance(v, float) and np.isnan(v)):
+        daily = df.group_by("date").last().sort("date")
+        points: list[OnchainPoint] = []
+        for bid_col, metric in BID_COLUMN_MAP.items():
+            if bid_col not in daily.columns:
                 continue
-            try:
-                day = date.fromisoformat(str(d)[:10])
-            except ValueError:
-                continue
-            points.append(
-                OnchainPoint(
-                    metric=metric,
-                    date=day,
-                    value=float(v),
-                    source="bitcoinisdata",
+            for d, v in zip(
+                daily["date"].to_list(), daily[bid_col].to_list(), strict=True
+            ):
+                if v is None or (isinstance(v, float) and np.isnan(v)):
+                    continue
+                try:
+                    day = date.fromisoformat(str(d)[:10])
+                except ValueError:
+                    continue
+                points.append(
+                    OnchainPoint(
+                        metric=metric,
+                        date=day,
+                        value=float(v),
+                        source="bitcoinisdata",
+                    )
                 )
-            )
+    except Exception as exc:
+        LOGGER.warning("bitcoinisdata parse failed: %s", exc)
+        return [], f"error:{exc}"
+
     return points, ("ok" if points else "error:empty_metrics")
