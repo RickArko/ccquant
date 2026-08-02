@@ -33,9 +33,14 @@ from ccquant.live_price import (
 
 MOM_LOOKBACK = 12
 LIQ_LOOKBACK = 52
-# Default daily viewport (~2y). Full BTC history is still embedded so the
-# rangeslider can zoom out to the entire series (esp. useful on monthly).
-CHART_DEFAULT_VIEW_DAYS = 730
+# Length presets for the long-term chart (full history remains embedded).
+CHART_LENGTH_DAYS: dict[str, int | None] = {
+    "1y": 365,
+    "2y": 730,
+    "5y": 1825,
+    "all": None,
+}
+CHART_DEFAULT_LENGTH = "2y"
 STALE_WARN_DAYS = 3
 DASHBOARD_TZ = ZoneInfo("America/Chicago")
 # Trading-desk presets exposed in the live tape toolbar (default: Chicago).
@@ -884,11 +889,13 @@ def _larsson_series(
 
 
 def _long_term_indicator_seed(snapshot: MarketSnapshot) -> dict[str, object]:
-    """Build JSON-serializable series for the daily long-term chart toggles."""
+    """Build JSON-serializable series for the long-term chart controls."""
     dates = [d.isoformat() for d in snapshot.btc_dates]
-    closes = list(snapshot.btc_closes)
+    opens = list(snapshot.btc_opens)
     highs = list(snapshot.btc_highs)
     lows = list(snapshot.btc_lows)
+    closes = list(snapshot.btc_closes)
+    volumes = list(snapshot.btc_volumes)
 
     sma50 = _sma(closes, 50)
     sma200 = _sma(closes, 200)
@@ -900,7 +907,7 @@ def _long_term_indicator_seed(snapshot: MarketSnapshot) -> dict[str, object]:
 
     larsson = _larsson_series(dates, highs, lows, closes, bar="daily")
 
-    m_dates, _mo, m_h, m_l, m_c, _mv = _monthly_ohlcv(
+    m_dates, m_o, m_h, m_l, m_c, m_v = _monthly_ohlcv(
         snapshot.btc_dates,
         snapshot.btc_opens,
         snapshot.btc_highs,
@@ -908,27 +915,41 @@ def _long_term_indicator_seed(snapshot: MarketSnapshot) -> dict[str, object]:
         snapshot.btc_closes,
         snapshot.btc_volumes,
     )
+    m_iso = [d.isoformat() for d in m_dates]
+    m_closes = list(m_c)
+    m_sma50 = _sma(m_closes, 50)
+    m_sma200 = _sma(m_closes, 200)
+    m_golden_x, m_golden_y, m_death_x, m_death_y = _cross_events(
+        m_iso, m_sma50, m_sma200
+    )
     monthly_larsson = _larsson_series(
-        [d.isoformat() for d in m_dates],
-        list(m_h),
-        list(m_l),
-        list(m_c),
-        bar="monthly",
+        m_iso, list(m_h), list(m_l), m_closes, bar="monthly"
     )
 
-    view_start: str | None = None
-    if snapshot.btc_dates:
-        end = snapshot.btc_dates[-1]
-        target = end - timedelta(days=CHART_DEFAULT_VIEW_DAYS)
-        view_start = next(
+    end = snapshot.btc_dates[-1] if snapshot.btc_dates else None
+    length_starts: dict[str, str | None] = {}
+    for key, days in CHART_LENGTH_DAYS.items():
+        if not dates:
+            length_starts[key] = None
+            continue
+        if days is None or end is None:
+            length_starts[key] = dates[0]
+            continue
+        target = end - timedelta(days=days)
+        length_starts[key] = next(
             (d.isoformat() for d in snapshot.btc_dates if d >= target),
             dates[0],
         )
 
     return {
         "dates": dates,
+        "open": opens,
+        "high": highs,
+        "low": lows,
         "close": closes,
-        "view_start": view_start,
+        "volume": volumes,
+        "default_length": CHART_DEFAULT_LENGTH,
+        "length_starts": length_starts,
         "sma50": sma50,
         "sma200": sma200,
         "sma111": sma111,
@@ -946,7 +967,27 @@ def _long_term_indicator_seed(snapshot: MarketSnapshot) -> dict[str, object]:
         "larsson_neutral": larsson["larsson_neutral"],
         "larsson_state": larsson["larsson_state"],
         "larsson_bands": larsson["larsson_bands"],
-        "monthly_larsson": monthly_larsson,
+        "monthly": {
+            "dates": m_iso,
+            "open": list(m_o),
+            "high": list(m_h),
+            "low": list(m_l),
+            "close": m_closes,
+            "volume": list(m_v),
+            "sma50": m_sma50,
+            "sma200": m_sma200,
+            "golden_x": m_golden_x,
+            "golden_y": m_golden_y,
+            "death_x": m_death_x,
+            "death_y": m_death_y,
+            "ema30": monthly_larsson["ema30"],
+            "ema60": monthly_larsson["ema60"],
+            "larsson_bull": monthly_larsson["larsson_bull"],
+            "larsson_bear": monthly_larsson["larsson_bear"],
+            "larsson_neutral": monthly_larsson["larsson_neutral"],
+            "larsson_state": monthly_larsson["larsson_state"],
+            "larsson_bands": monthly_larsson["larsson_bands"],
+        },
     }
 
 
@@ -957,8 +998,7 @@ def render_dashboard_html(
 ) -> str:
     """Return a self-contained single-page HTML dashboard."""
     try:
-        import plotly.graph_objects as go
-        from plotly.subplots import make_subplots
+        import plotly  # noqa: F401
     except ImportError as exc:
         raise ImportError(
             "plotly is required for the dashboard. Install with: uv sync"
@@ -966,90 +1006,41 @@ def render_dashboard_html(
 
     lt_seed = _long_term_indicator_seed(snapshot)
     lt_seed_json = json.dumps(lt_seed, separators=(",", ":"))
-
-    m_dates, m_o, m_h, m_l, m_c, m_v = _monthly_ohlcv(
-        snapshot.btc_dates,
-        snapshot.btc_opens,
-        snapshot.btc_highs,
-        snapshot.btc_lows,
-        snapshot.btc_closes,
-        snapshot.btc_volumes,
-    )
-    vol_colors = [
-        "#6fbf73" if c >= o else "#e57373" for o, c in zip(m_o, m_c, strict=True)
-    ]
-    monthly_fig = make_subplots(
-        rows=2,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.04,
-        row_heights=[0.72, 0.28],
-    )
-    monthly_fig.add_trace(
-        go.Candlestick(
-            x=[d.isoformat() for d in m_dates],
-            open=list(m_o),
-            high=list(m_h),
-            low=list(m_l),
-            close=list(m_c),
-            name="BTC",
-            increasing_line_color="#6fbf73",
-            increasing_fillcolor="#6fbf73",
-            decreasing_line_color="#e57373",
-            decreasing_fillcolor="#e57373",
-        ),
-        row=1,
-        col=1,
-    )
-    monthly_fig.add_trace(
-        go.Bar(
-            x=[d.isoformat() for d in m_dates],
-            y=list(m_v),
-            name="Volume",
-            marker_color=vol_colors,
-            opacity=0.75,
-        ),
-        row=2,
-        col=1,
-    )
-    monthly_fig.update_layout(
-        template="plotly_dark",
-        height=460,
-        margin=dict(l=48, r=24, t=36, b=24),
-        title=dict(text="BTC monthly — candles + volume", font=dict(size=14)),
-        showlegend=False,
-        paper_bgcolor="#12141a",
-        plot_bgcolor="#12141a",
-        # Candlestick defaults a top-axis slider; put it on the shared bottom
-        # axis so volume stays aligned and the full history is scrubbable.
-        xaxis_rangeslider_visible=False,
-        xaxis2_rangeslider_visible=True,
-        xaxis2_rangeslider_thickness=0.08,
-    )
-    monthly_fig.update_yaxes(title_text="USD", type="log", row=1, col=1)
-    monthly_fig.update_yaxes(title_text="Vol", row=2, col=1)
-    monthly_fig.update_xaxes(title_text="Month", row=2, col=1)
-    # CDN here so the JS-built daily plot (and live tape) can use Plotly.
-    monthly_chart = monthly_fig.to_html(
-        full_html=False,
-        include_plotlyjs="cdn",
-        config={"displayModeBar": False, "responsive": True},
-    )
     chart_html = f"""
+      <script charset="utf-8"
+              src="https://cdn.plot.ly/plotly-3.6.0.min.js"
+              integrity="sha256-QaOVwtVY0T02VaHrr6pnoHLCwayMJp4O5n4YyaE3rJk="
+              crossorigin="anonymous"></script>
       <div class="lt-toolbar">
-        <div class="live-btn-group" id="lt-modes"
-             aria-label="Long-term chart mode">
+        <div class="live-btn-group" id="lt-bars"
+             aria-label="Long-term bar size">
           <button type="button" class="live-btn active"
-                  data-lt-mode="daily">Daily</button>
+                  data-lt-bar="daily">Daily</button>
           <button type="button" class="live-btn"
-                  data-lt-mode="monthly">Monthly</button>
+                  data-lt-bar="monthly">Monthly</button>
+        </div>
+        <div class="live-btn-group" id="lt-styles"
+             aria-label="Long-term price style">
+          <button type="button" class="live-btn active"
+                  data-lt-style="line">Line</button>
+          <button type="button" class="live-btn"
+                  data-lt-style="candle">Candle</button>
+        </div>
+        <div class="live-btn-group" id="lt-lengths"
+             aria-label="Long-term length">
+          <button type="button" class="live-btn" data-lt-length="1y">1Y</button>
+          <button type="button" class="live-btn active"
+                  data-lt-length="2y">2Y</button>
+          <button type="button" class="live-btn" data-lt-length="5y">5Y</button>
+          <button type="button" class="live-btn"
+                  data-lt-length="all">All</button>
         </div>
         <div class="lt-ind-group" id="lt-indicators"
              aria-label="Long-term indicators">
           <label class="lt-ind" title="50/200 SMA trend filter (golden/death cross)">
             <input type="checkbox" id="lt-ind-sma" /> 50/200 SMA
           </label>
-          <label class="lt-ind" title="Pi Cycle Top: 111 DMA vs 2×350 DMA">
+          <label class="lt-ind" title="Pi Cycle Top: 111 DMA vs 2×350 DMA (daily)">
             <input type="checkbox" id="lt-ind-pi" /> Pi Cycle
           </label>
           <label class="lt-ind"
@@ -1061,32 +1052,31 @@ def render_dashboard_html(
         </div>
         <span class="live-chart-label" id="lt-ind-status"></span>
       </div>
-      <div id="lt-daily" class="lt-pane">
-        <div id="lt-daily-plot" class="lt-daily-plot"></div>
-      </div>
-      <div id="lt-monthly" class="lt-pane" hidden>{monthly_chart}</div>
+      <div id="lt-plot" class="lt-daily-plot"></div>
       <script type="application/json" id="lt-seed">{lt_seed_json}</script>
 """
     lt_js = """
 <script>
 (function () {
-  const modes = document.getElementById("lt-modes");
-  const daily = document.getElementById("lt-daily");
-  const monthly = document.getElementById("lt-monthly");
-  const plotEl = document.getElementById("lt-daily-plot");
+  const bars = document.getElementById("lt-bars");
+  const styles = document.getElementById("lt-styles");
+  const lengths = document.getElementById("lt-lengths");
+  const plotEl = document.getElementById("lt-plot");
   const seedEl = document.getElementById("lt-seed");
   const statusEl = document.getElementById("lt-ind-status");
   const smaCb = document.getElementById("lt-ind-sma");
   const piCb = document.getElementById("lt-ind-pi");
   const larssonCb = document.getElementById("lt-ind-larsson");
-  if (!modes || !daily || !monthly || !plotEl || !seedEl) return;
+  if (!bars || !styles || !lengths || !plotEl || !seedEl) return;
   if (typeof Plotly === "undefined") return;
 
   const seed = JSON.parse(seedEl.textContent);
-  let dailyReady = false;
-  let syncingDailyY = false;
-  let syncingMonthlyY = false;
-  let dailyRelayoutBound = false;
+  let barMode = "daily";
+  let styleMode = "line";
+  let lengthKey = seed.default_length || "2y";
+  let xRange = null;
+  let syncingY = false;
+  let relayoutBound = false;
 
   function dateKey(v) {
     if (typeof v === "number" && Number.isFinite(v)) {
@@ -1094,6 +1084,27 @@ def render_dashboard_html(
     }
     const m = String(v).match(/(\\d{4}-\\d{2}-\\d{2})/);
     return m ? m[1] : String(v);
+  }
+
+  function activeSeries() {
+    return barMode === "monthly" ? (seed.monthly || seed) : seed;
+  }
+
+  function windowForLength(key) {
+    const s = activeSeries();
+    const dates = s.dates || [];
+    if (!dates.length) return null;
+    const end = dates[dates.length - 1];
+    if (key === "all") return [dates[0], end];
+    const startHint = (seed.length_starts || {})[key];
+    if (!startHint) return [dates[0], end];
+    const start = dates.find(function (d) { return d >= startHint; }) || dates[0];
+    return [start, end];
+  }
+
+  function ensureXRange() {
+    if (!xRange) xRange = windowForLength(lengthKey);
+    return xRange;
   }
 
   function isXRelayout(ed) {
@@ -1105,24 +1116,15 @@ def render_dashboard_html(
 
   function resolveXRange(plot, ed) {
     ed = ed || {};
-    if (ed["xaxis.autorange"] || ed["xaxis2.autorange"]) return null;
-    const a0 = ed["xaxis.range[0]"] != null
-      ? ed["xaxis.range[0]"]
-      : ed["xaxis2.range[0]"];
-    const a1 = ed["xaxis.range[1]"] != null
-      ? ed["xaxis.range[1]"]
-      : ed["xaxis2.range[1]"];
+    if (ed["xaxis.autorange"]) return windowForLength("all");
+    const a0 = ed["xaxis.range[0]"];
+    const a1 = ed["xaxis.range[1]"];
     if (a0 != null && a1 != null) return [a0, a1];
     if (ed["xaxis.range"]) return ed["xaxis.range"];
-    if (ed["xaxis2.range"]) return ed["xaxis2.range"];
     if (ed["xaxis.rangeslider.range"]) return ed["xaxis.rangeslider.range"];
-    if (ed["xaxis2.rangeslider.range"]) return ed["xaxis2.rangeslider.range"];
-    const lay = plot.layout || {};
-    const xa = lay.xaxis || {};
-    const xa2 = lay.xaxis2 || {};
+    const xa = (plot.layout && plot.layout.xaxis) || {};
     if (xa.range && xa.range.length === 2) return xa.range;
-    if (xa2.range && xa2.range.length === 2) return xa2.range;
-    return null;
+    return ensureXRange();
   }
 
   function padLogRange(lo, hi) {
@@ -1133,68 +1135,20 @@ def render_dashboard_html(
     return [lo / pad, hi * pad];
   }
 
-  // Plotly log-axis range is in log10 units.
   function logAxisRange(lo, hi) {
     const padded = padLogRange(lo, hi);
     if (!padded) return null;
     return [Math.log10(padded[0]), Math.log10(padded[1])];
   }
 
-  function visibleSeries() {
-    const series = [seed.close];
-    if (smaCb && smaCb.checked) {
-      series.push(seed.sma50, seed.sma200);
-    }
-    if (piCb && piCb.checked) {
-      series.push(seed.sma111, seed.pi350x2);
-    }
-    if (larssonCb && larssonCb.checked) {
-      series.push(
-        seed.ema60, seed.larsson_bull, seed.larsson_bear, seed.larsson_neutral
-      );
-    }
-    return series;
-  }
-
-  function dailyYBounds(x0, x1) {
-    const dates = seed.dates || [];
-    if (!dates.length) return null;
-    const d0 = x0 == null ? null : dateKey(x0);
-    const d1 = x1 == null ? null : dateKey(x1);
-    let lo = Infinity;
-    let hi = -Infinity;
-    const series = visibleSeries();
-    for (let i = 0; i < dates.length; i++) {
-      const d = dateKey(dates[i]);
-      if (d0 != null && d < d0) continue;
-      if (d1 != null && d > d1) continue;
-      for (let s = 0; s < series.length; s++) {
-        const v = series[s][i];
-        if (typeof v === "number" && Number.isFinite(v) && v > 0) {
-          if (v < lo) lo = v;
-          if (v > hi) hi = v;
-        }
-      }
-    }
-    if (!(lo < Infinity && hi > -Infinity)) return null;
-    return logAxisRange(lo, hi);
-  }
-
-  function defaultXWindow() {
-    if (seed.view_start && seed.dates && seed.dates.length) {
-      return [seed.view_start, seed.dates[seed.dates.length - 1]];
-    }
-    return null;
-  }
-
-  function larssonShapes(bands, yref) {
+  function larssonShapes(bands) {
     if (!bands || !bands.length) return [];
     return bands.map(function (b) {
       const bull = b.state === "bull";
       return {
         type: "rect",
         xref: "x",
-        yref: yref || "y domain",
+        yref: "y domain",
         x0: b.start,
         x1: b.end,
         y0: 0,
@@ -1206,121 +1160,128 @@ def render_dashboard_html(
     });
   }
 
-  function updateLarssonStatus(series) {
-    if (!statusEl) return;
+  function visiblePriceBounds(series, x0, x1) {
+    const dates = series.dates || [];
+    const d0 = x0 == null ? null : dateKey(x0);
+    const d1 = x1 == null ? null : dateKey(x1);
+    let lo = Infinity;
+    let hi = -Infinity;
     const showSma = !!(smaCb && smaCb.checked);
-    const showPi = !!(piCb && piCb.checked);
+    const showPi = !!(piCb && piCb.checked) && barMode === "daily";
     const showLarsson = !!(larssonCb && larssonCb.checked);
-    const bits = [];
-    if (showSma) bits.push("50/200 SMA");
-    if (showPi) bits.push("Pi Cycle");
-    if (showLarsson) {
-      const st = series && series.larsson_state ? series.larsson_state : null;
-      bits.push(st ? ("Larsson: " + st) : "Larsson Line");
+    const seriesList = [];
+    if (styleMode === "candle") {
+      seriesList.push(series.low, series.high, series.open, series.close);
+    } else {
+      seriesList.push(series.close);
     }
-    statusEl.textContent = bits.length
-      ? bits.join(" · ")
-      : "long-term market view";
-  }
-
-  function layout() {
-    const xaxis = {
-      title: "Date",
-      type: "date",
-      rangeslider: { visible: true, thickness: 0.08 }
-    };
-    const yaxis = {
-      title: "USD",
-      type: "log",
-      fixedrange: false,
-      autorange: true
-    };
-    // Initial ~2y window + matching y-range so first paint is never blank.
-    const xw = !dailyReady ? defaultXWindow() : null;
-    if (xw) {
-      xaxis.range = xw;
-      const yb = dailyYBounds(xw[0], xw[1]);
-      if (yb) {
-        yaxis.autorange = false;
-        yaxis.range = yb;
+    if (showSma) seriesList.push(series.sma50, series.sma200);
+    if (showPi) seriesList.push(series.sma111, series.pi350x2);
+    if (showLarsson) {
+      seriesList.push(
+        series.ema60, series.larsson_bull, series.larsson_bear,
+        series.larsson_neutral
+      );
+    }
+    for (let i = 0; i < dates.length; i++) {
+      const d = dateKey(dates[i]);
+      if (d0 != null && d < d0) continue;
+      if (d1 != null && d > d1) continue;
+      for (let s = 0; s < seriesList.length; s++) {
+        const arr = seriesList[s];
+        if (!arr) continue;
+        const v = arr[i];
+        if (typeof v === "number" && Number.isFinite(v) && v > 0) {
+          if (v < lo) lo = v;
+          if (v > hi) hi = v;
+        }
       }
     }
-    const showLarsson = !!(larssonCb && larssonCb.checked);
-    return {
-      template: "plotly_dark",
-      height: 420,
-      margin: { l: 48, r: 24, t: 36, b: 24 },
-      title: { text: "BTC close (log) — market view", font: { size: 14 } },
-      yaxis: yaxis,
-      xaxis: xaxis,
-      shapes: showLarsson ? larssonShapes(seed.larsson_bands, "y domain") : [],
-      uirevision: "lt-daily",
-      showlegend: true,
-      legend: {
-        orientation: "h", y: 1.12, x: 0, font: { size: 10, color: "#9a958c" }
-      },
-      paper_bgcolor: "#12141a",
-      plot_bgcolor: "#12141a",
-      font: { color: "#e8e6e1" }
-    };
+    if (!(lo < Infinity && hi > -Infinity)) return null;
+    return logAxisRange(lo, hi);
   }
 
-  function syncDailyY(ed) {
-    if (syncingDailyY || !isXRelayout(ed)) return;
-    const xr = resolveXRange(plotEl, ed) || defaultXWindow();
-    const bounds = xr ? dailyYBounds(xr[0], xr[1]) : dailyYBounds(null, null);
-    if (!bounds) return;
-    syncingDailyY = true;
-    Plotly.relayout(plotEl, {
-      "yaxis.type": "log",
-      "yaxis.autorange": false,
-      "yaxis.range": bounds
-    }).then(
-      function () { syncingDailyY = false; },
-      function () { syncingDailyY = false; }
-    );
+  function updateStatus(series) {
+    if (!statusEl) return;
+    const bits = [];
+    if (smaCb && smaCb.checked) bits.push("50/200 SMA");
+    if (piCb && piCb.checked && barMode === "daily") bits.push("Pi Cycle");
+    if (larssonCb && larssonCb.checked) {
+      const st = series.larsson_state || null;
+      bits.push(st ? ("Larsson: " + st) : "Larsson Line");
+    }
+    bits.push(barMode === "monthly" ? "monthly" : "daily");
+    bits.push(styleMode);
+    bits.push(lengthKey.toUpperCase());
+    statusEl.textContent = bits.join(" · ");
   }
 
-  function bindDailyRelayout() {
-    if (dailyRelayoutBound || typeof plotEl.on !== "function") return;
-    plotEl.on("plotly_relayout", syncDailyY);
-    dailyRelayoutBound = true;
+  function setActiveGroup(group, attr, value) {
+    if (!group) return;
+    group.querySelectorAll(".live-btn").forEach(function (b) {
+      b.classList.toggle("active", b.getAttribute(attr) === value);
+    });
   }
 
-  function buildTraces() {
+  function syncIndicatorChrome() {
+    // Pi Cycle is daily-only (350 DMA warm-up).
+    if (piCb && piCb.parentElement) {
+      const monthly = barMode === "monthly";
+      piCb.parentElement.style.opacity = monthly ? "0.35" : "1";
+      piCb.disabled = monthly;
+      if (monthly) piCb.checked = false;
+    }
+  }
+
+  function buildTraces(series) {
     const showSma = !!(smaCb && smaCb.checked);
-    const showPi = !!(piCb && piCb.checked);
+    const showPi = !!(piCb && piCb.checked) && barMode === "daily";
     const showLarsson = !!(larssonCb && larssonCb.checked);
-    const traces = [{
-      type: "scatter",
-      mode: "lines",
-      name: "BTC",
-      x: seed.dates,
-      y: seed.close,
-      line: { color: "#F7931A", width: 2 }
-    }];
+    const traces = [];
+    if (styleMode === "candle") {
+      traces.push({
+        type: "candlestick",
+        name: "BTC",
+        x: series.dates,
+        open: series.open,
+        high: series.high,
+        low: series.low,
+        close: series.close,
+        increasing: { line: { color: "#6fbf73" }, fillcolor: "#6fbf73" },
+        decreasing: { line: { color: "#e57373" }, fillcolor: "#e57373" }
+      });
+    } else {
+      traces.push({
+        type: "scatter",
+        mode: "lines",
+        name: "BTC",
+        x: series.dates,
+        y: series.close,
+        line: { color: "#F7931A", width: 2 }
+      });
+    }
     if (showSma) {
       traces.push({
         type: "scatter", mode: "lines", name: "SMA 50",
-        x: seed.dates, y: seed.sma50,
+        x: series.dates, y: series.sma50,
         line: { color: "#6fa8dc", width: 1.4 }
       });
       traces.push({
         type: "scatter", mode: "lines", name: "SMA 200",
-        x: seed.dates, y: seed.sma200,
+        x: series.dates, y: series.sma200,
         line: { color: "#c27ba0", width: 1.4 }
       });
-      if (seed.golden_x && seed.golden_x.length) {
+      if (series.golden_x && series.golden_x.length) {
         traces.push({
           type: "scatter", mode: "markers", name: "Golden cross",
-          x: seed.golden_x, y: seed.golden_y,
+          x: series.golden_x, y: series.golden_y,
           marker: { color: "#6fbf73", size: 9, symbol: "triangle-up" }
         });
       }
-      if (seed.death_x && seed.death_x.length) {
+      if (series.death_x && series.death_x.length) {
         traces.push({
           type: "scatter", mode: "markers", name: "Death cross",
-          x: seed.death_x, y: seed.death_y,
+          x: series.death_x, y: series.death_y,
           marker: { color: "#e57373", size: 9, symbol: "triangle-down" }
         });
       }
@@ -1328,18 +1289,18 @@ def render_dashboard_html(
     if (showPi) {
       traces.push({
         type: "scatter", mode: "lines", name: "Pi 111 DMA",
-        x: seed.dates, y: seed.sma111,
+        x: series.dates, y: series.sma111,
         line: { color: "#ffd666", width: 1.5 }
       });
       traces.push({
         type: "scatter", mode: "lines", name: "Pi 2×350 DMA",
-        x: seed.dates, y: seed.pi350x2,
+        x: series.dates, y: series.pi350x2,
         line: { color: "#9b59b6", width: 1.5, dash: "dot" }
       });
-      if (seed.pi_top_x && seed.pi_top_x.length) {
+      if (series.pi_top_x && series.pi_top_x.length) {
         traces.push({
           type: "scatter", mode: "markers", name: "Pi Cycle top",
-          x: seed.pi_top_x, y: seed.pi_top_y,
+          x: series.pi_top_x, y: series.pi_top_y,
           marker: {
             color: "#e74c3c", size: 11, symbol: "star",
             line: { color: "#fff", width: 0.5 }
@@ -1350,175 +1311,143 @@ def render_dashboard_html(
     if (showLarsson) {
       traces.push({
         type: "scatter", mode: "lines", name: "EMA 60",
-        x: seed.dates, y: seed.ema60,
+        x: series.dates, y: series.ema60,
         line: { color: "#7f8c8d", width: 1.2, dash: "dash" }
       });
       traces.push({
         type: "scatter", mode: "lines", name: "Larsson bull",
-        x: seed.dates, y: seed.larsson_bull, connectgaps: false,
+        x: series.dates, y: series.larsson_bull, connectgaps: false,
         line: { color: "#d4af37", width: 2.6 }
       });
       traces.push({
         type: "scatter", mode: "lines", name: "Larsson bear",
-        x: seed.dates, y: seed.larsson_bear, connectgaps: false,
+        x: series.dates, y: series.larsson_bear, connectgaps: false,
         line: { color: "#5dade2", width: 2.6 }
       });
       traces.push({
         type: "scatter", mode: "lines", name: "Larsson wait",
-        x: seed.dates, y: seed.larsson_neutral, connectgaps: false,
+        x: series.dates, y: series.larsson_neutral, connectgaps: false,
         line: { color: "#95a5a6", width: 2.2 }
       });
     }
-    updateLarssonStatus(seed);
+    updateStatus(series);
     return traces;
   }
 
-  function monthlyLarssonTraces() {
-    const ml = seed.monthly_larsson;
-    if (!ml || !ml.dates) return [];
-    return [
-      {
-        type: "scatter", mode: "lines", name: "EMA 60",
-        x: ml.dates, y: ml.ema60,
-        line: { color: "#7f8c8d", width: 1.2, dash: "dash" },
-        xaxis: "x", yaxis: "y"
+  function layout(series) {
+    const xr = ensureXRange();
+    const yb = xr ? visiblePriceBounds(series, xr[0], xr[1]) : null;
+    const showLarsson = !!(larssonCb && larssonCb.checked);
+    return {
+      template: "plotly_dark",
+      height: 420,
+      margin: { l: 48, r: 24, t: 36, b: 24 },
+      title: {
+        text: "BTC " + barMode + " — " + styleMode + " (" + lengthKey + ")",
+        font: { size: 14 }
       },
-      {
-        type: "scatter", mode: "lines", name: "Larsson bull",
-        x: ml.dates, y: ml.larsson_bull, connectgaps: false,
-        line: { color: "#d4af37", width: 2.6 },
-        xaxis: "x", yaxis: "y"
+      xaxis: {
+        title: "Date",
+        type: "date",
+        range: xr || undefined,
+        rangeslider: { visible: true, thickness: 0.08 }
       },
-      {
-        type: "scatter", mode: "lines", name: "Larsson bear",
-        x: ml.dates, y: ml.larsson_bear, connectgaps: false,
-        line: { color: "#5dade2", width: 2.6 },
-        xaxis: "x", yaxis: "y"
+      yaxis: {
+        title: "USD",
+        type: "log",
+        fixedrange: false,
+        autorange: !yb,
+        range: yb || undefined
       },
-      {
-        type: "scatter", mode: "lines", name: "Larsson wait",
-        x: ml.dates, y: ml.larsson_neutral, connectgaps: false,
-        line: { color: "#95a5a6", width: 2.2 },
-        xaxis: "x", yaxis: "y"
-      }
-    ];
-  }
-
-  function applyMonthlyLarsson() {
-    const mPlot = monthly.querySelector(".js-plotly-plot");
-    if (!mPlot || !mPlot.data) return;
-    const show = !!(larssonCb && larssonCb.checked);
-    const ml = seed.monthly_larsson || {};
-    // Drop prior Larsson overlays (keep candles + volume).
-    const keep = [];
-    const drop = [];
-    mPlot.data.forEach(function (t, i) {
-      const n = t.name || "";
-      if (n.indexOf("Larsson") === 0 || n === "EMA 60") drop.push(i);
-      else keep.push(i);
-    });
-    const finish = function () {
-      const shapes = show ? larssonShapes(ml.larsson_bands, "y domain") : [];
-      Plotly.relayout(mPlot, { shapes: shapes });
-      if (show) {
-        Plotly.addTraces(mPlot, monthlyLarssonTraces());
-      }
-      updateLarssonStatus(show ? ml : seed);
-      syncMonthlyY({});
+      shapes: showLarsson ? larssonShapes(series.larsson_bands) : [],
+      // Keep overlays from resetting zoom; length buttons own xRange.
+      uirevision: barMode + ":" + styleMode + ":" + lengthKey,
+      showlegend: true,
+      legend: {
+        orientation: "h", y: 1.12, x: 0, font: { size: 10, color: "#9a958c" }
+      },
+      paper_bgcolor: "#12141a",
+      plot_bgcolor: "#12141a",
+      font: { color: "#e8e6e1" }
     };
-    if (drop.length) {
-      Plotly.deleteTraces(mPlot, drop).then(finish, finish);
-    } else {
-      finish();
-    }
   }
 
-  function isMonthlyMode() {
-    return !monthly.hidden;
-  }
-
-  function renderDaily() {
-    const p = Plotly.react(plotEl, buildTraces(), layout(), {
-      displayModeBar: false, responsive: true
-    });
-    Promise.resolve(p).then(function () {
-      dailyReady = true;
-      bindDailyRelayout();
-      syncDailyY({});
-    });
-  }
-
-  function syncMonthlyY(ed) {
-    if (syncingMonthlyY || !isXRelayout(ed)) return;
-    const mPlot = monthly.querySelector(".js-plotly-plot");
-    if (!mPlot || !mPlot.data) return;
-    const candle = mPlot.data.find(function (t) {
-      return t.type === "candlestick";
-    });
-    const volume = mPlot.data.find(function (t) {
-      return t.type === "bar";
-    });
-    if (!candle || !candle.x) return;
-    const xr = resolveXRange(mPlot, ed);
-    const d0 = xr ? dateKey(xr[0]) : null;
-    const d1 = xr ? dateKey(xr[1]) : null;
-    let lo = Infinity;
-    let hi = -Infinity;
-    let volHi = 0;
-    for (let i = 0; i < candle.x.length; i++) {
-      const d = dateKey(candle.x[i]);
-      if (d0 != null && d < d0) continue;
-      if (d1 != null && d > d1) continue;
-      const vals = [candle.low[i], candle.high[i], candle.open[i], candle.close[i]];
-      for (let j = 0; j < vals.length; j++) {
-        const v = vals[j];
-        if (typeof v === "number" && Number.isFinite(v) && v > 0) {
-          if (v < lo) lo = v;
-          if (v > hi) hi = v;
-        }
-      }
-      if (volume && typeof volume.y[i] === "number" && volume.y[i] > volHi) {
-        volHi = volume.y[i];
-      }
-    }
-    const priceRange = logAxisRange(lo, hi);
-    if (!priceRange) return;
-    const update = {
+  function syncY(ed) {
+    if (syncingY || !isXRelayout(ed)) return;
+    const series = activeSeries();
+    const xr = resolveXRange(plotEl, ed);
+    if (xr) xRange = [dateKey(xr[0]), dateKey(xr[1])];
+    const bounds = visiblePriceBounds(
+      series,
+      xRange ? xRange[0] : null,
+      xRange ? xRange[1] : null
+    );
+    if (!bounds) return;
+    syncingY = true;
+    Plotly.relayout(plotEl, {
       "yaxis.type": "log",
       "yaxis.autorange": false,
-      "yaxis.range": priceRange
-    };
-    if (volHi > 0) {
-      update["yaxis2.autorange"] = false;
-      update["yaxis2.range"] = [0, volHi * 1.12];
-    }
-    syncingMonthlyY = true;
-    Plotly.relayout(mPlot, update).then(
-      function () { syncingMonthlyY = false; },
-      function () { syncingMonthlyY = false; }
+      "yaxis.range": bounds
+    }).then(
+      function () { syncingY = false; },
+      function () { syncingY = false; }
     );
   }
 
-  function setMonthlyIndicatorChrome(showMonthly) {
-    // SMA / Pi are daily-only; Larsson recomputes on monthly bars.
-    [smaCb, piCb].forEach(function (el) {
-      if (!el || !el.parentElement) return;
-      el.parentElement.style.opacity = showMonthly ? "0.35" : "1";
-      el.disabled = !!showMonthly;
-    });
-    if (larssonCb && larssonCb.parentElement) {
-      larssonCb.parentElement.style.opacity = "1";
-      larssonCb.disabled = false;
-    }
+  function bindRelayout() {
+    if (relayoutBound || typeof plotEl.on !== "function") return;
+    plotEl.on("plotly_relayout", syncY);
+    relayoutBound = true;
   }
 
-  function onIndicatorChange() {
-    if (isMonthlyMode()) applyMonthlyLarsson();
-    else renderDaily();
+  function renderChart() {
+    syncIndicatorChrome();
+    const series = activeSeries();
+    ensureXRange();
+    const p = Plotly.react(plotEl, buildTraces(series), layout(series), {
+      displayModeBar: false, responsive: true
+    });
+    Promise.resolve(p).then(function () {
+      bindRelayout();
+      syncY({});
+    });
   }
+
+  bars.querySelectorAll(".live-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      const next = btn.getAttribute("data-lt-bar");
+      if (!next || next === barMode) return;
+      barMode = next;
+      setActiveGroup(bars, "data-lt-bar", barMode);
+      // Re-apply the selected length on the new bar series.
+      xRange = windowForLength(lengthKey);
+      renderChart();
+    });
+  });
+
+  styles.querySelectorAll(".live-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      const next = btn.getAttribute("data-lt-style");
+      if (!next || next === styleMode) return;
+      styleMode = next;
+      setActiveGroup(styles, "data-lt-style", styleMode);
+      renderChart();
+    });
+  });
+
+  lengths.querySelectorAll(".live-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      const next = btn.getAttribute("data-lt-length");
+      if (!next) return;
+      lengthKey = next;
+      setActiveGroup(lengths, "data-lt-length", lengthKey);
+      xRange = windowForLength(lengthKey);
+      renderChart();
+    });
+  });
 
   [smaCb, piCb, larssonCb].forEach(function (el) {
-    if (el) el.addEventListener("change", onIndicatorChange);
+    if (el) el.addEventListener("change", renderChart);
   });
 
   const clearBtn = document.getElementById("lt-ind-clear");
@@ -1527,43 +1456,13 @@ def render_dashboard_html(
       [smaCb, piCb, larssonCb].forEach(function (el) {
         if (el && !el.disabled) el.checked = false;
       });
-      onIndicatorChange();
+      renderChart();
     });
   }
 
-  // Monthly plot is already initialized by Plotly.newPlot in the embed.
-  const monthlyPlot = monthly.querySelector(".js-plotly-plot");
-  if (monthlyPlot && typeof monthlyPlot.on === "function") {
-    monthlyPlot.on("plotly_relayout", syncMonthlyY);
-  }
-
-  modes.querySelectorAll(".live-btn").forEach(function (btn) {
-    btn.addEventListener("click", function () {
-      const mode = btn.getAttribute("data-lt-mode");
-      modes.querySelectorAll(".live-btn").forEach(function (b) {
-        b.classList.toggle("active", b === btn);
-      });
-      const showMonthly = mode === "monthly";
-      daily.hidden = showMonthly;
-      monthly.hidden = !showMonthly;
-      setMonthlyIndicatorChrome(showMonthly);
-      if (typeof Plotly !== "undefined") {
-        const pane = showMonthly ? monthly : daily;
-        pane.querySelectorAll(".js-plotly-plot").forEach(function (el) {
-          try { Plotly.Plots.resize(el); } catch (err) {}
-        });
-        if (showMonthly) {
-          applyMonthlyLarsson();
-          syncMonthlyY({});
-        } else {
-          renderDaily();
-        }
-      }
-    });
-  });
-
-  // Bind daily relayout only after Plotly.react — .on does not exist on a bare div.
-  renderDaily();
+  setActiveGroup(lengths, "data-lt-length", lengthKey);
+  xRange = windowForLength(lengthKey);
+  renderChart();
 })();
 </script>
 """

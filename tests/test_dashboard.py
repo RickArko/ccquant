@@ -152,11 +152,12 @@ def test_render_dashboard_html_contains_hero() -> None:
     assert "ccquant" in page
     assert snap.headline in page
     assert "Outlook" in page
-    assert "BTC close" in page
+    assert "BTC close" in page or "BTC daily" in page
     assert "plotly" in page.lower()
-    assert 'data-lt-mode="monthly"' in page
-    assert "BTC monthly" in page
-    assert "Volume" in page
+    assert 'data-lt-bar="monthly"' in page
+    assert 'data-lt-style="candle"' in page
+    assert 'data-lt-length="2y"' in page
+    assert 'data-lt-length="all"' in page
     assert 'id="lt-ind-sma"' in page
     assert 'id="lt-ind-pi"' in page
     assert 'id="lt-ind-larsson"' in page
@@ -165,13 +166,11 @@ def test_render_dashboard_html_contains_hero() -> None:
     assert "pi350x2" in page
     assert "larsson_bull" in page
     assert "larsson_bands" in page
-    assert "monthly_larsson" in page
+    assert '"monthly"' in page
     assert "larssonShapes" in page
-    assert "view_start" in page
+    assert "length_starts" in page
     assert "rangeslider" in page
-    assert "syncDailyY" in page
-    assert "syncMonthlyY" in page
-    assert "bindDailyRelayout" in page
+    assert "renderChart" in page
     # Default viewport is ~2y when history is longer than that.
     long_page = render_dashboard_html(
         build_snapshot_from_panels(_synthetic_daily(n_days=1200))
@@ -179,9 +178,12 @@ def test_render_dashboard_html_contains_hero() -> None:
     seed = json.loads(
         long_page.split('id="lt-seed">', 1)[1].split("</script>", 1)[0]
     )
-    assert seed["view_start"] is not None
-    assert seed["dates"][0] < seed["view_start"]
-    assert seed["view_start"] < seed["dates"][-1]
+    assert seed["default_length"] == "2y"
+    assert seed["length_starts"]["2y"] is not None
+    assert seed["dates"][0] < seed["length_starts"]["2y"]
+    assert seed["length_starts"]["2y"] < seed["dates"][-1]
+    assert "open" in seed and "high" in seed
+    assert "monthly" in seed and "larsson_bands" in seed["monthly"]
     # Toggles default unchecked
     assert 'id="lt-ind-sma" checked' not in page
     assert 'id="lt-ind-pi" checked' not in page
