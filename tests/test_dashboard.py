@@ -96,6 +96,50 @@ def test_monthly_ohlcv_aggregates() -> None:
     assert v == (30.0, 5.0)
 
 
+def test_btc_monthly_gains_seed_matrix() -> None:
+    from ccquant.dashboard import _btc_monthly_gains_seed
+
+    # Two full months of BTC so Feb has a measurable MoM return.
+    end = date(2025, 2, 28)
+    rows: list[dict[str, object]] = []
+    for i in range(60):
+        d = end - timedelta(days=59 - i)
+        # Jan ends ~100, Feb ends ~110 → ~+10% Feb
+        close = 100.0 if d.month == 1 else 110.0
+        rows.append(
+            {
+                "symbol": "BTC",
+                "date": d,
+                "open": close,
+                "high": close,
+                "low": close,
+                "close": close,
+                "volume": 1.0,
+                "source": "test",
+            }
+        )
+    snap = build_snapshot_from_panels(pl.DataFrame(rows))
+    seed = _btc_monthly_gains_seed(snap)
+    assert seed["months"][0] == "Jan"
+    assert seed["months"][-1] == "Dec"
+    assert "2025" in seed["years"]
+    z = seed["z"]
+    assert isinstance(z, list) and z
+    # Find 2025 row; February (index 1) should be ~+10%.
+    years = seed["years"]
+    assert isinstance(years, list)
+    row = z[years.index("2025")]
+    assert isinstance(row, list)
+    feb = row[1]
+    assert feb is not None
+    assert feb == pytest.approx(10.0, abs=0.05)
+    zmax = seed["zmax"]
+    zmin = seed["zmin"]
+    assert isinstance(zmax, float) and isinstance(zmin, float)
+    assert zmin == -zmax
+    assert zmax > 0
+
+
 def test_sma_and_pi_cycle_helpers() -> None:
     from ccquant.dashboard import _cross_events, _sma
 
@@ -171,6 +215,10 @@ def test_render_dashboard_html_contains_hero() -> None:
     assert "length_starts" in page
     assert "rangeslider" in page
     assert "renderChart" in page
+    assert "BTC monthly gains" in page
+    assert 'id="btc-month-heatmap"' in page
+    assert 'id="btc-month-heatmap-seed"' in page
+    assert '"type":"heatmap"' in page or "type: \"heatmap\"" in page
     # Default viewport is ~2y when history is longer than that.
     long_page = render_dashboard_html(
         build_snapshot_from_panels(_synthetic_daily(n_days=1200))

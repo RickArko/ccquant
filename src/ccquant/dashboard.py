@@ -1,10 +1,11 @@
 """Lightweight single-page Market Tracker dashboard (HTML + Plotly).
 
 Condenses the notebook surface into one viewport: brand, headline, near-live
-BTC tape, key metrics, daily market chart, regime strip, and outlook. No
-HTTP server — write a self-contained HTML file via ``ccquant dashboard``.
-The live tape seeds from Binance/Coinbase at render time; the browser can
-poll Binance every 15s to keep the headline last price fresh.
+BTC tape, key metrics, daily market chart, regime strip, outlook, and a
+BTC monthly-gains heatmap. No HTTP server — write a self-contained HTML
+file via ``ccquant dashboard``. The live tape seeds from Binance/Coinbase
+at render time; the browser can poll Binance every 15s to keep the
+headline last price fresh.
 """
 
 from __future__ import annotations
@@ -50,6 +51,23 @@ LIVE_TZ_PRESETS: tuple[tuple[str, str, str], ...] = (
     ("ct", "America/Chicago", "CT"),
 )
 DEFAULT_LIVE_TZ = "ct"
+MONTH_LABELS: tuple[str, ...] = (
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
+# Cap |return| for the diverging colorscale so a few outliers don't flatten
+# the rest of the calendar (values still shown in cell text / hover).
+HEATMAP_RET_CAP_PCT = 40.0
 
 
 def _to_tz(dt: datetime, tz: ZoneInfo) -> datetime:
@@ -696,6 +714,54 @@ def _monthly_ohlcv(
     )
 
 
+def _btc_monthly_gains_seed(snapshot: MarketSnapshot) -> dict[str, object]:
+    """Year × month close-to-close return matrix (%) for the heatmap."""
+    m_dates, _, _, _, m_closes, _ = _monthly_ohlcv(
+        snapshot.btc_dates,
+        snapshot.btc_opens,
+        snapshot.btc_highs,
+        snapshot.btc_lows,
+        snapshot.btc_closes,
+        snapshot.btc_volumes,
+    )
+    ret_by_ym: dict[tuple[int, int], float] = {}
+    for i in range(1, len(m_dates)):
+        prev = m_closes[i - 1]
+        if prev == 0.0:
+            continue
+        d = m_dates[i]
+        ret_by_ym[(d.year, d.month)] = (m_closes[i] / prev - 1.0) * 100.0
+
+    years = sorted({d.year for d in m_dates}, reverse=True)
+    z: list[list[float | None]] = []
+    text: list[list[str]] = []
+    for year in years:
+        row: list[float | None] = []
+        trow: list[str] = []
+        for month in range(1, 13):
+            val = ret_by_ym.get((year, month))
+            row.append(val)
+            trow.append("" if val is None else f"{val:+.1f}")
+        z.append(row)
+        text.append(trow)
+
+    vals = [v for row in z for v in row if v is not None]
+    if vals:
+        peak = max(abs(v) for v in vals)
+        lim = min(HEATMAP_RET_CAP_PCT, max(10.0, peak))
+    else:
+        lim = HEATMAP_RET_CAP_PCT
+
+    return {
+        "months": list(MONTH_LABELS),
+        "years": [str(y) for y in years],
+        "z": z,
+        "text": text,
+        "zmin": -lim,
+        "zmax": lim,
+    }
+
+
 def _sma(values: list[float], window: int) -> list[float | None]:
     """Simple moving average; ``None`` until the window is warm."""
     out: list[float | None] = [None] * len(values)
@@ -1006,6 +1072,11 @@ def render_dashboard_html(
 
     lt_seed = _long_term_indicator_seed(snapshot)
     lt_seed_json = json.dumps(lt_seed, separators=(",", ":"))
+    heatmap_seed = _btc_monthly_gains_seed(snapshot)
+    heatmap_seed_json = json.dumps(heatmap_seed, separators=(",", ":"))
+    heat_years = heatmap_seed["years"]
+    n_heat_years = len(heat_years) if isinstance(heat_years, list) else 0
+    heat_plot_h = max(280, 36 * max(n_heat_years, 1) + 80)
     chart_html = f"""
       <script charset="utf-8"
               src="https://cdn.plot.ly/plotly-3.6.0.min.js"
@@ -1054,6 +1125,88 @@ def render_dashboard_html(
       </div>
       <div id="lt-plot" class="lt-daily-plot"></div>
       <script type="application/json" id="lt-seed">{lt_seed_json}</script>
+"""
+    heatmap_html = f"""
+    <section class="heatmap" aria-label="BTC monthly gains heatmap">
+      <h2>BTC monthly gains</h2>
+      <p class="heatmap-note">
+        Calendar-month close-to-close returns (%). Green = up, red = down;
+        intensity scales with magnitude (color clipped at
+        ±{HEATMAP_RET_CAP_PCT:.0f}%). Current month is month-to-date.
+      </p>
+      <div id="btc-month-heatmap" class="month-heatmap-plot"
+           style="min-height:{heat_plot_h}px"></div>
+      <script type="application/json"
+              id="btc-month-heatmap-seed">{heatmap_seed_json}</script>
+    </section>
+"""
+    heatmap_js = """
+<script>
+(function () {
+  const plotEl = document.getElementById("btc-month-heatmap");
+  const seedEl = document.getElementById("btc-month-heatmap-seed");
+  if (!plotEl || !seedEl || typeof Plotly === "undefined") return;
+  const seed = JSON.parse(seedEl.textContent);
+  const years = seed.years || [];
+  const h = Math.max(280, 36 * Math.max(years.length, 1) + 80);
+  const trace = {
+    type: "heatmap",
+    x: seed.months,
+    y: years,
+    z: seed.z,
+    text: seed.text,
+    texttemplate: "%{text}",
+    textfont: {
+      size: 11,
+      color: "#e8e6e1",
+      family: "IBM Plex Sans, Segoe UI, sans-serif"
+    },
+    colorscale: [
+      [0.0, "#b71c1c"],
+      [0.35, "#e57373"],
+      [0.5, "#1c2029"],
+      [0.65, "#6fbf73"],
+      [1.0, "#1b5e20"]
+    ],
+    zmid: 0,
+    zmin: seed.zmin,
+    zmax: seed.zmax,
+    hovertemplate: "%{y} %{x}<br>%{text}%<extra></extra>",
+    showscale: true,
+    colorbar: {
+      title: { text: "%", font: { color: "#9a958c", size: 11 } },
+      tickfont: { color: "#9a958c", size: 10 },
+      thickness: 12,
+      len: 0.85,
+      outlinewidth: 0,
+      bgcolor: "rgba(0,0,0,0)"
+    },
+    xgap: 2,
+    ygap: 2
+  };
+  const layout = {
+    paper_bgcolor: "#0e1014",
+    plot_bgcolor: "#12141a",
+    margin: { l: 52, r: 28, t: 8, b: 36 },
+    height: h,
+    xaxis: {
+      side: "top",
+      tickfont: { color: "#9a958c", size: 11 },
+      fixedrange: true
+    },
+    yaxis: {
+      autorange: "reversed",
+      tickfont: { color: "#9a958c", size: 11 },
+      fixedrange: true
+    },
+    font: { color: "#e8e6e1", family: "IBM Plex Sans, Segoe UI, sans-serif" }
+  };
+  Plotly.newPlot(plotEl, [trace], layout, {
+    displayModeBar: false,
+    responsive: true
+  });
+})();
+</script>
 """
     lt_js = """
 <script>
@@ -2251,6 +2404,29 @@ def render_dashboard_html(
       font-weight: 500;
     }}
     .outlook p {{ margin: 0; color: var(--fg); }}
+    .heatmap {{
+      border-top: 1px solid var(--line);
+      margin-top: 1.5rem;
+      padding-top: 1rem;
+    }}
+    .heatmap h2 {{
+      font-size: 0.75rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0 0 0.35rem;
+      font-weight: 500;
+    }}
+    .heatmap-note {{
+      margin: 0 0 0.65rem;
+      font-size: 0.82rem;
+      color: var(--muted);
+      max-width: 40rem;
+    }}
+    .month-heatmap-plot {{
+      width: 100%;
+      background: #12141a;
+    }}
     footer {{
       margin-top: 1.75rem;
       font-size: 0.78rem;
@@ -2274,6 +2450,7 @@ def render_dashboard_html(
       <h2>Outlook</h2>
       <p>{html.escape(snapshot.outlook)}</p>
     </section>
+    {heatmap_html}
     <footer>
       {html.escape(snapshot.freshness_note)} · Regime-conditional research only —
       not a prediction.
@@ -2284,6 +2461,7 @@ def render_dashboard_html(
   </main>
   {lt_js}
   {live_js}
+  {heatmap_js}
 </body>
 </html>
 """
