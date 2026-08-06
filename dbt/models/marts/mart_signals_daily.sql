@@ -5,7 +5,10 @@
         unique_key=['symbol', 'date'],
         on_schema_change='append_new_columns',
         schema='marts',
-        tags=['market']
+        tags=['market'],
+        post_hook=[
+            "delete from {{ this }} where symbol not in (select symbol from {{ ref('dim_assets') }})"
+        ]
     )
 }}
 
