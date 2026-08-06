@@ -10,6 +10,7 @@ headline last price fresh.
 
 from __future__ import annotations
 
+import calendar
 import html
 import json
 from dataclasses import dataclass
@@ -34,6 +35,11 @@ from ccquant.live_price import (
 
 MOM_LOOKBACK = 12
 LIQ_LOOKBACK = 52
+VOL_SMA_DAYS = 20
+REL_VOL_HIGH = 1.2
+REL_VOL_LOW = 0.8
+MTD_VOL_HIGH = 1.2
+MTD_VOL_LOW = 0.8
 # Length presets for the long-term chart (full history remains embedded).
 CHART_LENGTH_DAYS: dict[str, int | None] = {
     "1y": 365,
@@ -113,6 +119,10 @@ class MarketSnapshot:
     breadth_label: str
     demand_signal: int
     demand_label: str
+    vol_signal: int
+    vol_label: str
+    rel_vol_20: float | None
+    mtd_vol_ratio: float | None
     etf_flow_7d_m: float | None
     mstr_rel_20d: float | None
     outlook: str
@@ -399,6 +409,77 @@ def _oc_signal(onchain: pl.DataFrame) -> tuple[int, str]:
     return (1 if bullish else -1), f"{label} ({'+'.join(varying[:3])})"
 
 
+def _btc_volume_signal(
+    dates: tuple[date, ...] | list[date],
+    volumes: tuple[float, ...] | list[float],
+    *,
+    as_of: date,
+    ret_7d: float | None,
+) -> tuple[int, str, float | None, float | None]:
+    """BTC participation: 20d relative volume + MTD pace vs prior months.
+
+    Combines with 7d return into a confirm/deny chip:
+    sponsored / fragile / distribution / quiet / heavy / normal.
+    """
+    n = len(volumes)
+    if n < VOL_SMA_DAYS + 1 or len(dates) != n:
+        return 0, "MISSING", None, None
+
+    window = list(volumes[-(VOL_SMA_DAYS + 1) :])
+    last_vol = window[-1]
+    base = window[:-1]
+    if last_vol <= 0 or not base or sum(base) <= 0:
+        return 0, "MISSING", None, None
+    avg20 = sum(base) / len(base)
+    if avg20 <= 0:
+        return 0, "MISSING", None, None
+    rel_vol = last_vol / avg20
+
+    # MTD volume pace vs mean of prior 3 full calendar months.
+    month_totals: dict[tuple[int, int], float] = {}
+    for d, v in zip(dates, volumes, strict=True):
+        key = (d.year, d.month)
+        month_totals[key] = month_totals.get(key, 0.0) + v
+    mtd_ratio: float | None = None
+    cur_key = (as_of.year, as_of.month)
+    mtd_vol = month_totals.get(cur_key, 0.0)
+    prior_keys = sorted(k for k in month_totals if k < cur_key)[-3:]
+    prior_vols = [month_totals[k] for k in prior_keys if month_totals[k] > 0]
+    if prior_vols and mtd_vol > 0:
+        days_in_month = calendar.monthrange(as_of.year, as_of.month)[1]
+        pace = mtd_vol * (days_in_month / max(as_of.day, 1))
+        mtd_ratio = pace / (sum(prior_vols) / len(prior_vols))
+
+    elevated = rel_vol >= REL_VOL_HIGH or (
+        mtd_ratio is not None and mtd_ratio >= MTD_VOL_HIGH
+    )
+    quiet = rel_vol <= REL_VOL_LOW and (
+        mtd_ratio is None or mtd_ratio <= MTD_VOL_LOW
+    )
+    up = ret_7d is not None and ret_7d > 0.01
+    down = ret_7d is not None and ret_7d < -0.01
+
+    if elevated and up:
+        sig, name = 1, "sponsored"
+    elif elevated and down:
+        sig, name = -1, "distribution"
+    elif quiet and up:
+        sig, name = -1, "fragile"
+    elif quiet and down:
+        sig, name = 0, "washed out"
+    elif elevated:
+        sig, name = 0, "heavy"
+    elif quiet:
+        sig, name = 0, "quiet"
+    else:
+        sig, name = 0, "normal"
+
+    parts = [name, f"{rel_vol:.1f}×"]
+    if mtd_ratio is not None:
+        parts.append(f"MTD {mtd_ratio:.1f}×")
+    return sig, " · ".join(parts), rel_vol, mtd_ratio
+
+
 def _breadth_metrics(
     daily: pl.DataFrame, as_of: date
 ) -> tuple[float | None, float | None, int, int]:
@@ -544,6 +625,26 @@ def build_snapshot_from_panels(
         btc=btc,
     )
 
+    chart_cols = ["date", "open", "high", "low", "close"]
+    if "volume" in btc.columns:
+        chart_cols.append("volume")
+    chart = btc.select(chart_cols)
+    if "volume" not in chart.columns:
+        chart = chart.with_columns(pl.lit(0.0).alias("volume"))
+    btc_dates = tuple(d for d in chart["date"].to_list() if isinstance(d, date))
+    btc_opens = tuple(_as_float(x) for x in chart["open"].to_list())
+    btc_highs = tuple(_as_float(x) for x in chart["high"].to_list())
+    btc_lows = tuple(_as_float(x) for x in chart["low"].to_list())
+    btc_closes = tuple(_as_float(x) for x in chart["close"].to_list())
+    btc_volumes = tuple(_as_float(x) for x in chart["volume"].to_list())
+
+    vol_sig, vol_label, rel_vol, mtd_vol = _btc_volume_signal(
+        btc_dates,
+        btc_volumes,
+        as_of=as_of,
+        ret_7d=ret_7d,
+    )
+
     drivers: list[str] = []
     if liq_sig != 0:
         drivers.append(f"{liq_label} liquidity")
@@ -552,6 +653,8 @@ def build_snapshot_from_panels(
     drivers.append(f"{br_label} breadth")
     if demand_sig != 0 or (etf_7d is not None):
         drivers.append(f"demand {demand_label}")
+    if vol_sig != 0 or (rel_vol is not None and vol_label != "MISSING"):
+        drivers.append(f"volume {vol_label}")
     if ret_7d is not None:
         drivers.append(f"BTC 7d {ret_7d * 100:+.1f}%")
 
@@ -561,13 +664,13 @@ def build_snapshot_from_panels(
         supporting = "Tape is narrow — leadership is concentrated."
     else:
         supporting = "Breadth is balanced; wait for confirmation."
+    if vol_sig == 1:
+        supporting += " Volume sponsors the move."
+    elif vol_sig == -1 and "fragile" in vol_label:
+        supporting += " Rally lacks volume confirmation."
+    elif vol_sig == -1:
+        supporting += " Selling is volume-backed."
 
-    chart_cols = ["date", "open", "high", "low", "close"]
-    if "volume" in btc.columns:
-        chart_cols.append("volume")
-    chart = btc.select(chart_cols)
-    if "volume" not in chart.columns:
-        chart = chart.with_columns(pl.lit(0.0).alias("volume"))
     note = freshness_note or f"BTC daily through {as_of}"
 
     return MarketSnapshot(
@@ -591,17 +694,21 @@ def build_snapshot_from_panels(
         breadth_label=br_label,
         demand_signal=demand_sig,
         demand_label=demand_label,
+        vol_signal=vol_sig,
+        vol_label=vol_label,
+        rel_vol_20=rel_vol,
+        mtd_vol_ratio=mtd_vol,
         etf_flow_7d_m=etf_7d,
         mstr_rel_20d=mstr_rel,
         outlook=_outlook(stack_label, drivers),
         supporting=supporting,
         freshness_note=note,
-        btc_dates=tuple(d for d in chart["date"].to_list() if isinstance(d, date)),
-        btc_opens=tuple(_as_float(x) for x in chart["open"].to_list()),
-        btc_highs=tuple(_as_float(x) for x in chart["high"].to_list()),
-        btc_lows=tuple(_as_float(x) for x in chart["low"].to_list()),
-        btc_closes=tuple(_as_float(x) for x in chart["close"].to_list()),
-        btc_volumes=tuple(_as_float(x) for x in chart["volume"].to_list()),
+        btc_dates=btc_dates,
+        btc_opens=btc_opens,
+        btc_highs=btc_highs,
+        btc_lows=btc_lows,
+        btc_closes=btc_closes,
+        btc_volumes=btc_volumes,
     )
 
 
@@ -2214,6 +2321,16 @@ def render_dashboard_html(
     live_metric = (
         f"${live.last:,.2f}" if live is not None else "—"
     )
+    rel_vol_txt = (
+        f"{snapshot.rel_vol_20:.1f}×"
+        if snapshot.rel_vol_20 is not None
+        else "—"
+    )
+    mtd_vol_txt = (
+        f"{snapshot.mtd_vol_ratio:.1f}×"
+        if snapshot.mtd_vol_ratio is not None
+        else "—"
+    )
     metrics = [
         ("Latest", live_metric),
         ("Daily close", btc_px),
@@ -2226,6 +2343,8 @@ def render_dashboard_html(
             f"{_fmt_share(snapshot.pct_up_7d)} · {snapshot.n_universe}",
         ),
         ("Above 50d MA", _fmt_share(snapshot.pct_above_50)),
+        ("Rel vol 20d", rel_vol_txt),
+        ("MTD vol pace", mtd_vol_txt),
         ("Daily as of", snapshot.as_of.isoformat()),
     ]
     metrics_html = "".join(
@@ -2244,6 +2363,7 @@ def render_dashboard_html(
                 snapshot.demand_label,
                 tone_for(snapshot.demand_signal),
             ),
+            chip("Volume", snapshot.vol_label, tone_for(snapshot.vol_signal)),
             chip(
                 "Stack",
                 f"{snapshot.stack_label} ({snapshot.stack_score:+d})",

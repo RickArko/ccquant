@@ -72,6 +72,42 @@ def test_build_snapshot_includes_ohlcv() -> None:
     assert snap.btc_volumes[-1] > 0
 
 
+def test_btc_volume_signal_sponsored_and_mtd() -> None:
+    from ccquant.dashboard import _btc_volume_signal
+
+    end = date(2026, 3, 10)
+    dates: list[date] = []
+    volumes: list[float] = []
+    # Quiet baseline months; heavy March MTD + elevated last print.
+    for i in range(90):
+        d = end - timedelta(days=89 - i)
+        dates.append(d)
+        volumes.append(4_000.0 if d.month == 3 else 1_000.0)
+    volumes[-1] = 5_000.0
+    sig, label, rel, mtd = _btc_volume_signal(
+        dates, volumes, as_of=end, ret_7d=0.05
+    )
+    assert rel is not None and rel > 1.2
+    assert mtd is not None and mtd > 1.0
+    assert sig == 1
+    assert "sponsored" in label
+    assert "MTD" in label
+
+    sig_down, label_down, _, _ = _btc_volume_signal(
+        dates, volumes, as_of=end, ret_7d=-0.05
+    )
+    assert sig_down == -1
+    assert "distribution" in label_down
+
+
+def test_build_snapshot_includes_volume_chip_fields() -> None:
+    snap = build_snapshot_from_panels(_synthetic_daily(n_days=120))
+    assert snap.vol_label
+    assert snap.rel_vol_20 is not None
+    assert snap.mtd_vol_ratio is not None
+    assert snap.vol_signal in {-1, 0, 1}
+
+
 def test_monthly_ohlcv_aggregates() -> None:
     from ccquant.dashboard import _monthly_ohlcv
 
@@ -228,6 +264,9 @@ def test_render_dashboard_html_contains_hero() -> None:
     assert 'text: "Year"' in page
     assert "current_month" in page
     assert "rgba(247, 147, 26" in page
+    assert "Rel vol 20d" in page
+    assert "MTD vol pace" in page
+    assert ">Volume<" in page or "Volume" in page
     # Default viewport is ~2y when history is longer than that.
     long_page = render_dashboard_html(
         build_snapshot_from_panels(_synthetic_daily(n_days=1200))
