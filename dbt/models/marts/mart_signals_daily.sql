@@ -1,3 +1,7 @@
+{# Incremental merges only upsert the WHERE filter; they do not drop rows for
+   symbols that left dim_assets (active=false after universe refresh). This
+   post_hook prune keeps the panel aligned with the live universe and with
+   mart_signals_symbol_in_universe. #}
 {{
     config(
         materialized='incremental',
@@ -6,10 +10,6 @@
         on_schema_change='append_new_columns',
         schema='marts',
         tags=['market'],
-        -- Incremental merges only upsert the WHERE filter; they do not drop
-        -- rows for symbols that left dim_assets (active=false after universe
-        -- refresh). This prune keeps the panel aligned with the live universe
-        -- and with mart_signals_symbol_in_universe.
         post_hook=[
             "delete from {{ this }} where symbol not in (select symbol from {{ ref('dim_assets') }})"
         ]
