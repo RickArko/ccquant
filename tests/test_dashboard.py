@@ -138,6 +138,8 @@ def test_btc_monthly_gains_seed_matrix() -> None:
     assert isinstance(zmax, float) and isinstance(zmin, float)
     assert zmin == -zmax
     assert zmax > 0
+    assert seed["current_month"] == "Feb"
+    assert seed["current_year"] == "2025"
 
 
 def test_sma_and_pi_cycle_helpers() -> None:
@@ -224,6 +226,8 @@ def test_render_dashboard_html_contains_hero() -> None:
     assert "categoryarray: years" in page
     assert 'text: "Month"' in page
     assert 'text: "Year"' in page
+    assert "current_month" in page
+    assert "rgba(247, 147, 26" in page
     # Default viewport is ~2y when history is longer than that.
     long_page = render_dashboard_html(
         build_snapshot_from_panels(_synthetic_daily(n_days=1200))

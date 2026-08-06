@@ -752,6 +752,7 @@ def _btc_monthly_gains_seed(snapshot: MarketSnapshot) -> dict[str, object]:
     else:
         lim = HEATMAP_RET_CAP_PCT
 
+    as_of = snapshot.as_of
     return {
         "months": list(MONTH_LABELS),
         "years": [str(y) for y in years],
@@ -759,6 +760,9 @@ def _btc_monthly_gains_seed(snapshot: MarketSnapshot) -> dict[str, object]:
         "text": text,
         "zmin": -lim,
         "zmax": lim,
+        # Axis / cell highlight for the still-open (or latest) month.
+        "current_month": MONTH_LABELS[as_of.month - 1],
+        "current_year": str(as_of.year),
     }
 
 
@@ -1132,7 +1136,7 @@ def render_dashboard_html(
       <p class="heatmap-note">
         Calendar-month close-to-close returns (%). Green = up, red = down;
         intensity scales with magnitude (color clipped at
-        ±{HEATMAP_RET_CAP_PCT:.0f}%). Current month is month-to-date.
+        ±{HEATMAP_RET_CAP_PCT:.0f}%). Current month (MTD) is highlighted.
       </p>
       <div id="btc-month-heatmap" class="month-heatmap-plot"
            style="min-height:{heat_plot_h}px"></div>
@@ -1149,6 +1153,10 @@ def render_dashboard_html(
   const seed = JSON.parse(seedEl.textContent);
   const months = seed.months || [];
   const years = seed.years || [];
+  const curMonth = seed.current_month || null;
+  const curYear = seed.current_year || null;
+  const mi = curMonth != null ? months.indexOf(curMonth) : -1;
+  const yi = curYear != null ? years.indexOf(curYear) : -1;
   // Tall enough that every year tick has room; months forced via tickmode.
   const h = Math.max(320, 40 * Math.max(years.length, 1) + 110);
   const tickFont = {
@@ -1156,12 +1164,47 @@ def render_dashboard_html(
     size: 12,
     family: "IBM Plex Sans, Segoe UI, sans-serif"
   };
+  const accent = "#f7931a";
+  // Bold + accent the current month / year axis labels (Plotly allows <b>/<span>).
+  const monthTickText = months.map(function (m) {
+    if (m !== curMonth) return m;
+    return "<b style='color:" + accent + "'>" + m + "</b>";
+  });
+  const yearTickText = years.map(function (y) {
+    if (y !== curYear) return y;
+    return "<b style='color:" + accent + "'>" + y + "</b>";
+  });
+  // Emphasize the MTD cell value in-grid.
+  const cellText = (seed.text || []).map(function (row, r) {
+    return (row || []).map(function (cell, c) {
+      if (r === yi && c === mi && cell) {
+        return "<b>" + cell + "</b>";
+      }
+      return cell;
+    });
+  });
+  const shapes = [];
+  if (mi >= 0 && yi >= 0) {
+    // Category axes accept serial indices; ±0.5 frames one heatmap cell.
+    shapes.push({
+      type: "rect",
+      xref: "x",
+      yref: "y",
+      x0: mi - 0.48,
+      x1: mi + 0.48,
+      y0: yi - 0.48,
+      y1: yi + 0.48,
+      line: { color: accent, width: 2.5 },
+      fillcolor: "rgba(247, 147, 26, 0.12)",
+      layer: "above"
+    });
+  }
   const trace = {
     type: "heatmap",
     x: months,
     y: years,
     z: seed.z,
-    text: seed.text,
+    text: cellText,
     texttemplate: "%{text}",
     textfont: {
       size: 11,
@@ -1196,6 +1239,7 @@ def render_dashboard_html(
     plot_bgcolor: "#12141a",
     margin: { l: 72, r: 36, t: 56, b: 52 },
     height: h,
+    shapes: shapes,
     // Explicit tickvals so Plotly never skips Jan–Dec or year labels.
     xaxis: {
       title: {
@@ -1209,7 +1253,7 @@ def render_dashboard_html(
       categoryarray: months,
       tickmode: "array",
       tickvals: months,
-      ticktext: months,
+      ticktext: monthTickText,
       tickfont: tickFont,
       tickangle: 0,
       ticks: "outside",
@@ -1233,7 +1277,7 @@ def render_dashboard_html(
       categoryarray: years,
       tickmode: "array",
       tickvals: years,
-      ticktext: years,
+      ticktext: yearTickText,
       autorange: "reversed",
       tickfont: tickFont,
       ticks: "outside",
