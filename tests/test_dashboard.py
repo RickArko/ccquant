@@ -219,6 +219,11 @@ def test_render_dashboard_html_contains_hero() -> None:
     assert 'id="btc-month-heatmap"' in page
     assert 'id="btc-month-heatmap-seed"' in page
     assert '"type":"heatmap"' in page or "type: \"heatmap\"" in page
+    assert 'tickmode: "array"' in page
+    assert "categoryarray: months" in page
+    assert "categoryarray: years" in page
+    assert 'text: "Month"' in page
+    assert 'text: "Year"' in page
     # Default viewport is ~2y when history is longer than that.
     long_page = render_dashboard_html(
         build_snapshot_from_panels(_synthetic_daily(n_days=1200))

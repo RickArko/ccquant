@@ -1076,7 +1076,7 @@ def render_dashboard_html(
     heatmap_seed_json = json.dumps(heatmap_seed, separators=(",", ":"))
     heat_years = heatmap_seed["years"]
     n_heat_years = len(heat_years) if isinstance(heat_years, list) else 0
-    heat_plot_h = max(280, 36 * max(n_heat_years, 1) + 80)
+    heat_plot_h = max(320, 40 * max(n_heat_years, 1) + 110)
     chart_html = f"""
       <script charset="utf-8"
               src="https://cdn.plot.ly/plotly-3.6.0.min.js"
@@ -1147,11 +1147,18 @@ def render_dashboard_html(
   const seedEl = document.getElementById("btc-month-heatmap-seed");
   if (!plotEl || !seedEl || typeof Plotly === "undefined") return;
   const seed = JSON.parse(seedEl.textContent);
+  const months = seed.months || [];
   const years = seed.years || [];
-  const h = Math.max(280, 36 * Math.max(years.length, 1) + 80);
+  // Tall enough that every year tick has room; months forced via tickmode.
+  const h = Math.max(320, 40 * Math.max(years.length, 1) + 110);
+  const tickFont = {
+    color: "#e8e6e1",
+    size: 12,
+    family: "IBM Plex Sans, Segoe UI, sans-serif"
+  };
   const trace = {
     type: "heatmap",
-    x: seed.months,
+    x: months,
     y: years,
     z: seed.z,
     text: seed.text,
@@ -1187,17 +1194,57 @@ def render_dashboard_html(
   const layout = {
     paper_bgcolor: "#0e1014",
     plot_bgcolor: "#12141a",
-    margin: { l: 52, r: 28, t: 8, b: 36 },
+    margin: { l: 72, r: 36, t: 56, b: 52 },
     height: h,
+    // Explicit tickvals so Plotly never skips Jan–Dec or year labels.
     xaxis: {
+      title: {
+        text: "Month",
+        font: { color: "#9a958c", size: 11 },
+        standoff: 8
+      },
       side: "top",
-      tickfont: { color: "#9a958c", size: 11 },
-      fixedrange: true
+      type: "category",
+      categoryorder: "array",
+      categoryarray: months,
+      tickmode: "array",
+      tickvals: months,
+      ticktext: months,
+      tickfont: tickFont,
+      tickangle: 0,
+      ticks: "outside",
+      ticklen: 4,
+      tickcolor: "#2a2e38",
+      showline: true,
+      linecolor: "#2a2e38",
+      showgrid: false,
+      fixedrange: true,
+      // Draw the same month labels along the bottom edge.
+      mirror: "allticks"
     },
     yaxis: {
+      title: {
+        text: "Year",
+        font: { color: "#9a958c", size: 11 },
+        standoff: 10
+      },
+      type: "category",
+      categoryorder: "array",
+      categoryarray: years,
+      tickmode: "array",
+      tickvals: years,
+      ticktext: years,
       autorange: "reversed",
-      tickfont: { color: "#9a958c", size: 11 },
-      fixedrange: true
+      tickfont: tickFont,
+      ticks: "outside",
+      ticklen: 4,
+      tickcolor: "#2a2e38",
+      showline: true,
+      linecolor: "#2a2e38",
+      showgrid: false,
+      fixedrange: true,
+      // Mirror year labels on the right for long calendars.
+      mirror: "allticks"
     },
     font: { color: "#e8e6e1", family: "IBM Plex Sans, Segoe UI, sans-serif" }
   };
