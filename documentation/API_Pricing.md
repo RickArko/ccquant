@@ -130,7 +130,8 @@ OHLCV fallback (daily only).
   live market data is loaded.
 - **Notes:** The public API without a Demo key is 5-15 calls/min (unstable) and
   may return HTTP 401. The free Demo key gives a stable 30 calls/min
-  (`x-cg-demo-api-key` header).
+  (`x-cg-demo-api-key` header). Python sync (`fetch_top_markets` /
+  `fetch_coingecko_daily`) sends this header when `CG_DEMO_API_KEY` is set.
 - **ccquant usage:** `sync universe` fetches top-100 by market cap (1-2 calls);
   daily backfill fallback (~180-day chunks per asset). `Eth.ipynb` / `BTC.ipynb`
   use the Demo key for live market-cap series and print the attribution credit.
@@ -217,6 +218,11 @@ source of real on-chain valuation data.
 - **Subscription expiry:** The API returns `"Hello {username}, subscription
   EXPIRED."` when the subscription lapses. The notebook detects this and falls
   back to the free sample / synthetic.
+- **CLI guards:** `sync onchain` / `sync bootstrap` skip BID when valuation rows
+  are already fresh (max date ≥ yesterday) unless `--force`. `BID_CSV_PATH` is
+  loaded before the API when set. `sync bootstrap` keeps BID off unless
+  `--allow-bid`. New-machine runbook:
+  [`Machine_Setup.md`](Machine_Setup.md).
 
 ---
 
@@ -389,8 +395,8 @@ terms of service:
 | Binance / Coinbase | Keyless public endpoints; ccquant sync uses `request_delay_seconds` (default 0.25s) |
 | CoinGecko | 0.25s delay; 180-day chunks; 429-retry with 60s backoff |
 | FRED | Sequential, one request per series per run |
-| blockchain.info | 1s spacing, 12h staleness gate, sequential, 429-retry |
-| bitcoinisdata.com | API: sequential, cached in DuckDB; CSV: one-time download |
+| blockchain.info | 1s spacing; CLI skips when max date ≥ yesterday unless `--force`; 429-retry |
+| bitcoinisdata.com | API/CSV; CLI skip-if-fresh + `BID_CSV_PATH` before API; bootstrap `--allow-bid` |
 | Glassnode | 6s spacing, 12h staleness gate, 50 calls/day cap (Light API) |
 | Solana public RPC | 1 req/s per wallet; max 50 wallets in tail config |
 | mempool.space | 1 req/s per address; keep `max_wallets` low for bitcoin tail |
@@ -402,9 +408,13 @@ terms of service:
 
 ```bash
 uv run ccquant db backup
-# restore: cp data/backups/ccquant-YYYYMMDD-HHMMSS.duckdb data/ccquant.duckdb
+uv run ccquant db restore --source data/backups/ccquant-YYYYMMDD-HHMMSS.duckdb --force
+# or: uv run ccquant sync bootstrap --from-backup PATH --force-restore
 uv run dbt run --select tag:twitter --full-refresh --project-dir dbt --profiles-dir dbt
 ```
+
+New machine / Mac Mini credit-safe bring-up:
+[`Machine_Setup.md`](Machine_Setup.md).
 
 All on-chain data is cached in a local DuckDB store (`data/onchain.duckdb`) with
 incremental refresh — re-running the notebook only hits the network for stale

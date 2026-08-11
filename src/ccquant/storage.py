@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal
@@ -1016,13 +1017,87 @@ class MarketStore:
         timestamp = datetime.now(tz=UTC).strftime("%Y%m%d-%H%M%S")
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / f"ccquant-{timestamp}.duckdb"
-        import shutil
-
         shutil.copy2(str(self.path), str(dest))
         backups = sorted(dest_dir.glob("ccquant-*.duckdb"), reverse=True)
         for old in backups[keep:]:
             old.unlink()
         return dest
+
+    @staticmethod
+    def restore(
+        source: Path | str,
+        dest: Path | str,
+        *,
+        force: bool = False,
+    ) -> Path:
+        """Copy a DuckDB backup into ``dest`` after a cheap integrity probe.
+
+        Writes via a sibling ``.tmp`` file then replaces ``dest`` so a failed
+        copy never leaves a truncated database.
+        """
+        source_path = Path(source).resolve()
+        dest_path = Path(dest).resolve()
+        if not source_path.exists():
+            raise FileNotFoundError(f"source DB not found: {source_path}")
+        if source_path == dest_path:
+            raise ValueError("source and dest resolve to the same path")
+        if dest_path.exists() and not force:
+            raise FileExistsError(
+                f"dest exists (pass force=True to overwrite): {dest_path}"
+            )
+        MarketStore._probe_duckdb(source_path)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = dest_path.with_name(dest_path.name + ".tmp")
+        if tmp_path.exists():
+            tmp_path.unlink()
+        try:
+            shutil.copy2(str(source_path), str(tmp_path))
+            MarketStore._probe_duckdb(tmp_path)
+            tmp_path.replace(dest_path)
+        except Exception:
+            if tmp_path.exists():
+                tmp_path.unlink()
+            raise
+        return dest_path
+
+    @staticmethod
+    def _probe_duckdb(path: Path) -> None:
+        """Open read-only and require a usable ``assets`` table."""
+        conn = duckdb.connect(str(path), read_only=True)
+        try:
+            names = {str(row[0]) for row in conn.execute("show tables").fetchall()}
+            if "assets" not in names:
+                raise ValueError(f"not a ccquant DuckDB (missing assets): {path}")
+            conn.execute("select count(*) from assets").fetchone()
+        finally:
+            conn.close()
+
+    def onchain_max_date(self, *, metric: str, source: str) -> date | None:
+        row = self._conn.execute(
+            """
+            select max(date) from onchain_series
+            where metric = ? and source = ?
+            """,
+            [metric, source],
+        ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        value = row[0]
+        if isinstance(value, date):
+            return value
+        return date.fromisoformat(str(value)[:10])
+
+    def daily_backfill_stats(self) -> tuple[int, int]:
+        """Return ``(complete_count, active_asset_count)`` for daily sync."""
+        assets = self.active_assets()
+        if not assets:
+            return 0, 0
+        complete = 0
+        for asset in assets:
+            state = self.get_state(asset.symbol, "1d")
+            if state is not None and state.backfill_complete:
+                complete += 1
+        return complete, len(assets)
 
     def migrate_onchain(self, source_db: str | Path) -> dict[str, int]:
         source_path = Path(source_db)

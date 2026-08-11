@@ -420,32 +420,97 @@ class MarketSync:
             await asyncio.sleep(macro_cfg.request_delay_seconds)
         return results
 
-    def sync_onchain(self, *, delay_seconds: float = 1.0) -> dict[str, int]:
-        """Fetch blockchain.info fundamentals + optional BID valuation."""
+    def sync_onchain(
+        self,
+        *,
+        delay_seconds: float = 1.0,
+        force: bool = False,
+        allow_bid: bool = True,
+    ) -> dict[str, int]:
+        """Fetch blockchain.info fundamentals + optional BID valuation.
+
+        ``allow_bid=False`` skips paid BID API/CSV entirely (bootstrap default).
+        When BID data is already fresh (max date >= yesterday) and ``force`` is
+        false, the API/CSV pull is skipped. ``BID_CSV_PATH`` is tried before the
+        API when BID is allowed.
+        """
         from ccquant.onchain_fetch import (
+            BC_SOURCE,
+            BID_SOURCE,
             fetch_bid_valuation_points,
             fetch_blockchain_info_points,
+            load_bid_csv_points,
         )
 
         results: dict[str, int] = {}
-        with httpx.Client(timeout=60.0) as client:
-            bc_points = fetch_blockchain_info_points(
-                client, delay_seconds=delay_seconds
+        today = datetime.now(tz=UTC).date()
+        fresh_cutoff = today - timedelta(days=1)
+
+        bc_max = self.store.onchain_max_date(metric="hashrate", source=BC_SOURCE)
+        bc_fresh = not force and bc_max is not None and bc_max >= fresh_cutoff
+        if bc_fresh:
+            LOGGER.info(
+                "blockchain.info skipped (fresh through %s) — use force=True",
+                bc_max,
             )
+            results["blockchain.info"] = 0
+        else:
+            with httpx.Client(timeout=60.0) as client:
+                bc_points = fetch_blockchain_info_points(
+                    client, delay_seconds=delay_seconds
+                )
             results["blockchain.info"] = self.store.upsert_onchain_series(bc_points)
 
+        if not allow_bid:
+            LOGGER.info("bitcoinisdata skipped (allow_bid=False)")
+            results["bitcoinisdata"] = 0
+            return results
+
+        bid_mvrv = self.store.onchain_max_date(metric="mvrv", source=BID_SOURCE)
+        bid_nupl = self.store.onchain_max_date(metric="nupl", source=BID_SOURCE)
+        bid_fresh = (
+            not force
+            and bid_mvrv is not None
+            and bid_nupl is not None
+            and bid_mvrv >= fresh_cutoff
+            and bid_nupl >= fresh_cutoff
+        )
+        if bid_fresh:
+            LOGGER.info(
+                "bitcoinisdata skipped_fresh (mvrv=%s nupl=%s)",
+                bid_mvrv,
+                bid_nupl,
+            )
+            results["bitcoinisdata"] = 0
+            return results
+
+        csv_points, csv_status = load_bid_csv_points()
+        if csv_status == "ok" and not force:
+            results["bitcoinisdata"] = self.store.upsert_onchain_series(csv_points)
+            LOGGER.info(
+                "bitcoinisdata loaded from BID_CSV_PATH (%s points)",
+                results["bitcoinisdata"],
+            )
+            return results
+
+        with httpx.Client(timeout=60.0) as client:
             bid_points, bid_status = fetch_bid_valuation_points(client)
-            if bid_status == "ok":
-                results["bitcoinisdata"] = self.store.upsert_onchain_series(
-                    bid_points
-                )
-            else:
-                LOGGER.warning(
-                    "bitcoinisdata valuation skipped (%s) — "
-                    "renew BITCOIN_IS_DATA_KEY for MVRV/NUPL history",
-                    bid_status,
-                )
-                results["bitcoinisdata"] = 0
+        if bid_status == "ok":
+            results["bitcoinisdata"] = self.store.upsert_onchain_series(bid_points)
+        elif csv_status == "ok":
+            # force=True preferred API but fell back to CSV on API failure
+            results["bitcoinisdata"] = self.store.upsert_onchain_series(csv_points)
+            LOGGER.warning(
+                "bitcoinisdata API %s — used BID_CSV_PATH fallback",
+                bid_status,
+            )
+        else:
+            LOGGER.warning(
+                "bitcoinisdata valuation skipped (%s) — "
+                "renew BITCOIN_IS_DATA_KEY or set BID_CSV_PATH for MVRV/NUPL",
+                bid_status,
+            )
+            results["bitcoinisdata"] = 0
         return results
 
     def sync_etf_mstr(self) -> dict[str, int]:

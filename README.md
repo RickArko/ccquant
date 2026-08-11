@@ -37,6 +37,20 @@ uv run ccquant sync backfill --interval 1h --top 10
 uv run ccquant status
 ```
 
+### New machine / Mac Mini
+
+Prefer **copy-first** (DuckDB backup) over a cold API backfill — see
+[`documentation/Machine_Setup.md`](documentation/Machine_Setup.md):
+
+```bash
+# On source: uv run ccquant db backup --dest data/backups
+# On new machine:
+uv run ccquant sync bootstrap --from-backup PATH/ccquant-YYYYMMDD-HHMMSS.duckdb --force-restore
+# No backup? staged cold sync (BID/wallets off by default):
+# uv run ccquant sync bootstrap --cold --dry-run
+# uv run ccquant sync bootstrap --cold -c config/lean.yaml
+```
+
 **Notebooks in VS Code / Cursor:** after `uv sync`, select the project interpreter
 (`.venv/bin/python`) or the **Python (ccquant)** kernel when opening any `.ipynb`.
 Missing `ipykernel` usually means the env was created with `uv sync --no-dev` or

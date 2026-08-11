@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 from datetime import UTC, date, datetime, timedelta
 
 import httpx
@@ -13,6 +15,9 @@ from ccquant.models import (
     OpenInterest,
     OrderBookSnapshot,
 )
+
+LOGGER = logging.getLogger(__name__)
+_CG_DEMO_WARNED = False
 
 BINANCE_API = "https://api.binance.com"
 BINANCE_FAPI = "https://fapi.binance.com"
@@ -52,6 +57,20 @@ async def probe_coinbase_product(client: httpx.AsyncClient, product_id: str) -> 
     return resp.status_code == 200
 
 
+def _coingecko_headers() -> dict[str, str]:
+    """Return Demo-key headers when ``CG_DEMO_API_KEY`` is set."""
+    global _CG_DEMO_WARNED
+    key = os.environ.get("CG_DEMO_API_KEY", "").strip()
+    if not key:
+        if not _CG_DEMO_WARNED:
+            LOGGER.warning(
+                "CG_DEMO_API_KEY unset — CoinGecko sync uses public rate limits"
+            )
+            _CG_DEMO_WARNED = True
+        return {}
+    return {"x-cg-demo-api-key": key}
+
+
 async def fetch_top_markets(
     client: httpx.AsyncClient,
     *,
@@ -59,6 +78,7 @@ async def fetch_top_markets(
 ) -> list[dict[str, str | int]]:
     pages = (size + 99) // 100
     markets: list[dict[str, str | int]] = []
+    headers = _coingecko_headers()
     for page in range(1, pages + 1):
         resp = await client.get(
             f"{COINGECKO_API}/coins/markets",
@@ -69,6 +89,7 @@ async def fetch_top_markets(
                 "page": page,
                 "sparkline": "false",
             },
+            headers=headers,
         )
         resp.raise_for_status()
         for item in resp.json():
@@ -263,6 +284,7 @@ async def fetch_coingecko_daily(
     range_start = start or date(2013, 1, 1)
     candles: list[DailyOhlcv] = []
     chunk_start = range_start
+    headers = _coingecko_headers()
     while chunk_start <= end:
         chunk_end = min(chunk_start + timedelta(days=COINGECKO_CHUNK_DAYS - 1), end)
         resp = await client.get(
@@ -272,6 +294,7 @@ async def fetch_coingecko_daily(
                 "from": str(_date_seconds(chunk_start, end_of_day=False)),
                 "to": str(_date_seconds(chunk_end, end_of_day=True)),
             },
+            headers=headers,
         )
         if resp.status_code == 429:
             await asyncio.sleep(60)

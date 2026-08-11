@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -187,12 +188,17 @@ def sync_macro(
 @sync_app.command("onchain")
 def sync_onchain(
     config: str | None = typer.Option(None, "--config", "-c"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Ignore freshness gates and re-pull blockchain.info / BID",
+    ),
 ) -> None:
     """Fetch BTC on-chain fundamentals (blockchain.info) + BID valuation."""
     store, cfg = _load(config)
     syncer = MarketSync(store, cfg)
     try:
-        results = syncer.sync_onchain()
+        results = syncer.sync_onchain(force=force, allow_bid=True)
     finally:
         store.close()
     total = sum(results.values())
@@ -322,6 +328,314 @@ def sync_tweets(
         f"entities: {counts.get('tweet_entities', 0)}"
     )
     store.close()
+
+
+def _print_status_table(store: MarketStore) -> None:
+    table = Table(title="ccquant data status")
+    for col in [
+        "symbol",
+        "rank",
+        "daily rows",
+        "daily range",
+        "hourly rows",
+        "hourly range",
+    ]:
+        table.add_column(col)
+    for row in store.status_rows():
+        table.add_row(
+            str(row["symbol"]),
+            str(row["rank"]),
+            str(row["daily_rows"]),
+            f"{row['daily_from'] or '-'} -> {row['daily_to'] or '-'}",
+            str(row["hourly_rows"]),
+            f"{row['hourly_from'] or '-'} -> {row['hourly_to'] or '-'}",
+        )
+    console.print(table)
+
+
+def _env_flag(name: str) -> str:
+    return "set" if os.environ.get(name, "").strip() else "absent"
+
+
+def _print_bootstrap_plan(
+    *,
+    mode: str,
+    cfg: AppConfig,
+    size: int | None,
+    hourly_top: int | None,
+    allow_bid: bool,
+    with_wallets: bool,
+    run_dbt: bool,
+    from_backup: Path | None,
+) -> None:
+    top = hourly_top if hourly_top is not None else cfg.hourly.top
+    uni = size if size is not None else cfg.universe.size
+    console.print(f"[bold]Bootstrap plan[/bold] ({mode})")
+    if from_backup is not None:
+        console.print(f"  restore: {from_backup} -> {cfg.database}")
+    steps: list[tuple[str, str]] = [
+        ("universe", "RATE_SENSITIVE"),
+        (
+            "daily OHLCV "
+            + ("full history" if mode == "cold" else "tail"),
+            "FREE",
+        ),
+        (f"hourly OHLCV tail (top {top})", "FREE"),
+        ("open interest tail", "FREE"),
+        ("order-book depth", "FREE"),
+        ("MEV / DEX prices", "FREE"),
+        ("macro (FRED)", "FREE" if _env_flag("FRED_API_KEY") == "set" else "SKIP"),
+        ("onchain blockchain.info", "FREE"),
+    ]
+    if allow_bid:
+        steps.append(("onchain BID valuation", "PAID"))
+    else:
+        steps.append(("onchain BID valuation", "SKIP"))
+    steps.append(("ETF / MSTR", "FREE"))
+    if with_wallets:
+        steps.append(("wallets history+tail", "HEAVY_IO"))
+    else:
+        steps.append(("wallets", "SKIP"))
+    steps.append(("dbt snapshot+build", "LOCAL" if run_dbt else "SKIP"))
+    for name, risk in steps:
+        console.print(f"  [{risk}] {name}")
+    console.print(
+        "  keys: "
+        f"CG_DEMO={_env_flag('CG_DEMO_API_KEY')}  "
+        f"FRED={_env_flag('FRED_API_KEY')}  "
+        f"BID={_env_flag('BITCOIN_IS_DATA_KEY')}  "
+        f"BID_CSV={_env_flag('BID_CSV_PATH')}"
+    )
+    console.print(f"  universe size={uni}  hourly_top={top}  db={cfg.database}")
+
+
+@sync_app.command("bootstrap")
+def sync_bootstrap(
+    config: str | None = typer.Option(None, "--config", "-c"),
+    from_backup: Annotated[
+        Path | None,
+        typer.Option(
+            "--from-backup",
+            help="Restore this DuckDB backup then lean-tail sync",
+        ),
+    ] = None,
+    force_restore: bool = typer.Option(
+        False,
+        "--force-restore",
+        help="Overwrite existing DB when using --from-backup",
+    ),
+    cold: bool = typer.Option(
+        False,
+        "--cold",
+        help="Staged first sync from APIs (no backup)",
+    ),
+    force_cold: bool = typer.Option(
+        False,
+        "--force-cold",
+        help="Allow --cold even when daily backfill looks complete",
+    ),
+    size: int | None = typer.Option(None, "--size", help="Override universe size"),
+    hourly_top: int | None = typer.Option(
+        None, "--hourly-top", help="Limit hourly/OI to top-N assets"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print credit plan only; make no changes"
+    ),
+    allow_bid: bool = typer.Option(
+        False,
+        "--allow-bid",
+        help="Allow paid bitcoinisdata valuation pull (default: off)",
+    ),
+    with_wallets: bool = typer.Option(
+        False,
+        "--with-wallets",
+        help="Include wallet history/tail (default: off; HEAVY_IO)",
+    ),
+    dbt: bool = typer.Option(
+        True,
+        "--dbt/--no-dbt",
+        help="Run dbt snapshot + build after sync",
+    ),
+    oi_interval: Annotated[
+        str,
+        typer.Option("--oi-interval", help="Open interest interval: 1d or 1h"),
+    ] = "1h",
+) -> None:
+    """Credit-safe machine bootstrap: restore+tail or staged cold sync.
+
+    Prefer ``--from-backup`` when moving machines. Use ``--cold`` only when no
+    DuckDB is available. BID and wallets stay off unless opted in.
+    """
+    if bool(from_backup) == cold:
+        console.print(
+            "[red]Specify exactly one of --from-backup PATH or --cold[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    cfg = load_config(config)
+    mode = "restore" if from_backup is not None else "cold"
+    _print_bootstrap_plan(
+        mode=mode,
+        cfg=cfg,
+        size=size,
+        hourly_top=hourly_top,
+        allow_bid=allow_bid,
+        with_wallets=with_wallets,
+        run_dbt=dbt,
+        from_backup=from_backup,
+    )
+    if dry_run:
+        console.print("[yellow]Dry run — no changes made[/yellow]")
+        raise typer.Exit(code=0)
+
+    if from_backup is not None:
+        try:
+            MarketStore.restore(
+                from_backup, Path(cfg.database), force=force_restore
+            )
+            console.print(
+                f"[green]Restored backup -> {cfg.database}[/green]"
+            )
+        except FileExistsError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1) from exc
+        except (FileNotFoundError, ValueError) as exc:
+            console.print(f"[red]Restore failed:[/red] {exc}")
+            raise typer.Exit(code=1) from exc
+
+    store, cfg = _load(config)
+    try:
+        if cold and not force_cold:
+            complete, total = store.daily_backfill_stats()
+            if total > 0 and complete == total:
+                console.print(
+                    "[red]Daily backfill already complete for all active "
+                    "assets. Use --from-backup for machine moves, or "
+                    "--force-cold to re-run a cold bootstrap.[/red]"
+                )
+                raise typer.Exit(code=1)
+
+        syncer = MarketSync(store, cfg)
+        top = hourly_top if hourly_top is not None else cfg.hourly.top
+
+        async def run() -> None:
+            try:
+                count = await syncer.update_universe(size=size)
+                console.print(f"[green]Universe updated: {count} assets[/green]")
+
+                # Cold: full daily history once; restore path: full=True still
+                # tails when backfill_complete is already true.
+                console.print("\n[dim]Daily OHLCV...[/dim]")
+                daily = await syncer.backfill(interval="1d", full=True)
+                console.print(
+                    f"[green]Daily: {sum(daily.values())} candles[/green]"
+                )
+
+                console.print(f"\n[dim]Hourly tail (top {top})...[/dim]")
+                hourly = await syncer.backfill(
+                    interval="1h", full=False, top=top
+                )
+                console.print(
+                    f"[green]Hourly: {sum(hourly.values())} candles[/green]"
+                )
+
+                if cfg.open_interest.enabled:
+                    console.print(f"\n[dim]Open interest ({oi_interval})...[/dim]")
+                    oi = await syncer.backfill_oi_all(
+                        interval=oi_interval, full=False, top=top
+                    )
+                    console.print(
+                        f"[green]OI: {sum(oi.values())} data points[/green]"
+                    )
+
+                if cfg.order_book.enabled:
+                    depth_top = cfg.order_book.top
+                    console.print(
+                        f"\n[dim]Order-book depth (top {depth_top})...[/dim]"
+                    )
+                    depth_results = await syncer.sync_order_book_all(top=depth_top)
+                    console.print(
+                        f"[green]Depth: {sum(depth_results.values())} "
+                        f"snapshots[/green]"
+                    )
+
+                if cfg.mev.enabled:
+                    console.print("\n[dim]MEV (DEX prices / boost)...[/dim]")
+                    mev_results = await syncer.sync_mev(top=cfg.order_book.top)
+                    console.print(
+                        f"[green]MEV: {sum(mev_results.values())} rows[/green]"
+                    )
+
+                if cfg.macro.enabled:
+                    console.print("\n[dim]Macro (FRED)...[/dim]")
+                    macro = await syncer.backfill_macro()
+                    console.print(
+                        f"[green]Macro: {sum(macro.values())} data points[/green]"
+                    )
+            finally:
+                await syncer.close()
+
+        asyncio.run(run())
+
+        console.print("\n[dim]On-chain...[/dim]")
+        oc_results = MarketSync(store, cfg).sync_onchain(
+            allow_bid=allow_bid, force=False
+        )
+        console.print(
+            f"[green]On-chain: {sum(oc_results.values())} points[/green]"
+        )
+        for src, n in sorted(oc_results.items()):
+            console.print(f"  {src}: {n}")
+
+        console.print("\n[dim]ETF flows + MSTR...[/dim]")
+        etf_results = MarketSync(store, cfg).sync_etf_mstr()
+        console.print(
+            f"[green]ETF/MSTR: {sum(etf_results.values())} points[/green]"
+        )
+
+        if with_wallets and cfg.wallet_tracking.enabled:
+            console.print("\n[dim]Wallet intelligence...[/dim]")
+            wallet_syncer = WalletSync(store, cfg)
+
+            async def run_wallets() -> dict[str, int]:
+                try:
+                    return await wallet_syncer.sync_all(full=False, tail=True)
+                finally:
+                    await wallet_syncer.close()
+
+            wallet_results = asyncio.run(run_wallets())
+            console.print(
+                f"[green]Wallets: {sum(wallet_results.values())} "
+                f"operations[/green]"
+            )
+        elif with_wallets:
+            console.print(
+                "[yellow]Wallets requested but wallet_tracking disabled "
+                "in config[/yellow]"
+            )
+    finally:
+        store.close()
+
+    if dbt:
+        console.print("\n[dim]dbt snapshot...[/dim]")
+        snap_ok = _run_dbt("snapshot")
+        if snap_ok:
+            console.print("[green]dbt snapshot: PASS[/green]")
+        else:
+            console.print("[yellow]dbt snapshot: skipped or failed[/yellow]")
+        console.print("\n[dim]dbt build...[/dim]")
+        dbt_ok = _run_dbt("build")
+        if dbt_ok:
+            console.print("[green]dbt build: PASS[/green]")
+        else:
+            console.print("[yellow]dbt build: skipped or failed[/yellow]")
+
+    store, _cfg = _load(config)
+    try:
+        console.print()
+        _print_status_table(store)
+    finally:
+        store.close()
 
 
 @sync_app.command("all")
@@ -762,6 +1076,35 @@ def db_backup(
         console.print(f"[green]Backup created:[/green] {path}")
     finally:
         store.close()
+
+
+@db_app.command("restore")
+def db_restore(
+    source: Annotated[
+        Path,
+        typer.Option("--source", help="Path to a ccquant DuckDB backup"),
+    ],
+    config: str | None = typer.Option(None, "--config", "-c"),
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite an existing destination DB"
+    ),
+) -> None:
+    """Restore a DuckDB backup into the configured database path."""
+    cfg = load_config(config)
+    dest = Path(cfg.database)
+    try:
+        path = MarketStore.restore(source, dest, force=force)
+    except FileExistsError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]Restore failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print(f"[green]Restored:[/green] {source} -> {path}")
+    console.print(
+        "[dim]Next: uv run ccquant sync bootstrap "
+        "(or uv run ccquant status)[/dim]"
+    )
 
 
 @wallet_app.command("discover")
