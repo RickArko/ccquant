@@ -184,3 +184,99 @@ def test_load_project_dotenv_override_strips_inline_comments(
     monkeypatch.chdir(tmp_path)
     assert load_project_dotenv(tmp_path) == env_file
     assert os.environ["FRED_API_KEY"] == "abcd1234abcd1234abcd1234abcd1234"
+
+
+def test_sync_onchain_allow_bid_false_skips_bid(tmp_path, monkeypatch) -> None:
+    from unittest.mock import MagicMock
+
+    from ccquant.models import OnchainPoint
+
+    store = MarketStore(tmp_path / "ccquant.duckdb")
+    syncer = MarketSync(
+        store,
+        AppConfig(
+            database=tmp_path / "ccquant.duckdb",
+            universe=UniverseConfig(request_delay_seconds=0),
+        ),
+    )
+    monkeypatch.setattr(
+        "ccquant.onchain_fetch.fetch_blockchain_info_points",
+        lambda *_a, **_k: [
+            OnchainPoint(
+                metric="hashrate",
+                date=date(2026, 7, 1),
+                value=1.0,
+                source="blockchain.info",
+            )
+        ],
+    )
+    bid_mock = MagicMock()
+    monkeypatch.setattr(
+        "ccquant.onchain_fetch.fetch_bid_valuation_points", bid_mock
+    )
+    monkeypatch.setattr(
+        "ccquant.onchain_fetch.load_bid_csv_points",
+        lambda *_a, **_k: ([], "missing_path"),
+    )
+    try:
+        results = syncer.sync_onchain(allow_bid=False, force=True)
+    finally:
+        store.close()
+    assert results["bitcoinisdata"] == 0
+    assert results["blockchain.info"] == 1
+    bid_mock.assert_not_called()
+
+
+def test_sync_onchain_skips_bid_when_fresh(tmp_path, monkeypatch) -> None:
+    from datetime import UTC, datetime
+    from unittest.mock import MagicMock
+
+    from ccquant.models import OnchainPoint
+
+    store = MarketStore(tmp_path / "ccquant.duckdb")
+    today = datetime.now(tz=UTC).date()
+    store.upsert_onchain_series(
+        [
+            OnchainPoint(
+                metric="hashrate",
+                date=today,
+                value=1.0,
+                source="blockchain.info",
+            ),
+            OnchainPoint(
+                metric="mvrv",
+                date=today,
+                value=2.0,
+                source="bitcoinisdata",
+            ),
+            OnchainPoint(
+                metric="nupl",
+                date=today,
+                value=0.3,
+                source="bitcoinisdata",
+            ),
+        ]
+    )
+    syncer = MarketSync(
+        store,
+        AppConfig(
+            database=tmp_path / "ccquant.duckdb",
+            universe=UniverseConfig(request_delay_seconds=0),
+        ),
+    )
+    bc_mock = MagicMock(return_value=[])
+    bid_mock = MagicMock(return_value=([], "missing_key"))
+    monkeypatch.setattr(
+        "ccquant.onchain_fetch.fetch_blockchain_info_points", bc_mock
+    )
+    monkeypatch.setattr(
+        "ccquant.onchain_fetch.fetch_bid_valuation_points", bid_mock
+    )
+    try:
+        results = syncer.sync_onchain(allow_bid=True, force=False)
+    finally:
+        store.close()
+    assert results["blockchain.info"] == 0
+    assert results["bitcoinisdata"] == 0
+    bc_mock.assert_not_called()
+    bid_mock.assert_not_called()

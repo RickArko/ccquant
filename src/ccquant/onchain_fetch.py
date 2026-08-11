@@ -6,6 +6,7 @@ import logging
 import os
 import time
 from datetime import UTC, date, datetime
+from pathlib import Path
 
 import httpx
 import numpy as np
@@ -18,6 +19,8 @@ LOGGER = logging.getLogger(__name__)
 BC_API = "https://api.blockchain.info/charts"
 BID_API = "https://bitcoinisdata.com/api/get_data"
 BID_START_BLOCK = 400_000
+BID_SOURCE = "bitcoinisdata"
+BC_SOURCE = "blockchain.info"
 
 BLOCKCHAIN_METRICS: dict[str, str] = {
     "hash-rate": "hashrate",
@@ -153,31 +156,63 @@ def fetch_bid_valuation_points(
         df = pl.DataFrame(rows)
         if "date" not in df.columns:
             return [], "error:no_date"
-
-        daily = df.group_by("date").last().sort("date")
-        points: list[OnchainPoint] = []
-        for bid_col, metric in BID_COLUMN_MAP.items():
-            if bid_col not in daily.columns:
-                continue
-            for d, v in zip(
-                daily["date"].to_list(), daily[bid_col].to_list(), strict=True
-            ):
-                if v is None or (isinstance(v, float) and np.isnan(v)):
-                    continue
-                try:
-                    day = date.fromisoformat(str(d)[:10])
-                except ValueError:
-                    continue
-                points.append(
-                    OnchainPoint(
-                        metric=metric,
-                        date=day,
-                        value=float(v),
-                        source="bitcoinisdata",
-                    )
-                )
+        points = _points_from_bid_frame(df)
     except Exception as exc:
         LOGGER.warning("bitcoinisdata parse failed: %s", exc)
         return [], f"error:{exc}"
 
+    return points, ("ok" if points else "error:empty_metrics")
+
+
+def _points_from_bid_frame(df: pl.DataFrame) -> list[OnchainPoint]:
+    if "date" not in df.columns:
+        return []
+    daily = df.group_by("date").last().sort("date")
+    points: list[OnchainPoint] = []
+    for bid_col, metric in BID_COLUMN_MAP.items():
+        if bid_col not in daily.columns:
+            continue
+        for d, v in zip(
+            daily["date"].to_list(), daily[bid_col].to_list(), strict=True
+        ):
+            if v is None or (isinstance(v, float) and np.isnan(v)):
+                continue
+            try:
+                day = date.fromisoformat(str(d)[:10])
+            except ValueError:
+                continue
+            points.append(
+                OnchainPoint(
+                    metric=metric,
+                    date=day,
+                    value=float(v),
+                    source=BID_SOURCE,
+                )
+            )
+    return points
+
+
+def load_bid_csv_points(
+    path: str | Path | None = None,
+) -> tuple[list[OnchainPoint], str]:
+    """Load BID valuation metrics from a local CSV (``BID_CSV_PATH``).
+
+    Returns ``(points, status)`` where status is ``ok``, ``missing_path``,
+    or ``error:<msg>``.
+    """
+    if path is None:
+        raw = os.environ.get("BID_CSV_PATH", "").strip()
+        if not raw:
+            return [], "missing_path"
+        csv_path = Path(raw)
+    else:
+        csv_path = Path(path)
+    if not csv_path.exists():
+        return [], "missing_path"
+    try:
+        df = pl.read_csv(csv_path, try_parse_dates=True)
+        points = _points_from_bid_frame(df)
+    except Exception as exc:
+        LOGGER.warning("BID CSV load failed (%s): %s", csv_path, exc)
+        return [], f"error:{exc}"
     return points, ("ok" if points else "error:empty_metrics")

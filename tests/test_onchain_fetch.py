@@ -13,6 +13,7 @@ from ccquant.onchain_fetch import (
     fetch_bid_valuation_points,
     fetch_blockchain_chart,
     fetch_blockchain_info_points,
+    load_bid_csv_points,
 )
 
 
@@ -167,3 +168,23 @@ def test_fetch_bid_valuation_points_happy_path() -> None:
     assert by_metric["mvrv"].date == date(2024, 1, 1)
     assert by_metric["mvrv"].value == pytest.approx(2.6)
     assert by_metric["mvrv"].source == "bitcoinisdata"
+
+
+def test_load_bid_csv_points_happy_path(tmp_path) -> None:
+    csv_path = tmp_path / "bid.csv"
+    csv_path.write_text(
+        "date,total_mvrv,total_realized_price,total_nupl\n"
+        "2024-01-01,2.5,40000,0.4\n"
+        "2024-01-02,2.6,41000,0.41\n",
+        encoding="utf-8",
+    )
+    points, status = load_bid_csv_points(csv_path)
+    assert status == "ok"
+    assert len(points) == 6
+    assert {p.metric for p in points} == {"mvrv", "realized_price", "nupl"}
+
+
+def test_load_bid_csv_points_missing_path(tmp_path) -> None:
+    points, status = load_bid_csv_points(tmp_path / "missing.csv")
+    assert points == []
+    assert status == "missing_path"

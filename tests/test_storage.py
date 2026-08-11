@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from pathlib import Path
 
 import duckdb
+import pytest
 
 from ccquant.models import (
     Asset,
@@ -14,6 +16,7 @@ from ccquant.models import (
     OnchainPoint,
     OpenInterest,
     OrderBookSnapshot,
+    SyncState,
 )
 from ccquant.storage import MarketStore
 
@@ -393,4 +396,60 @@ def test_upsert_macro_series_is_idempotent(tmp_path) -> None:
         assert row is not None and row[0] == 4.5
     finally:
         store.close()
+
+
+def test_restore_round_trip_and_refuse_overwrite(tmp_path: Path) -> None:
+    source = tmp_path / "source.duckdb"
+    dest = tmp_path / "dest.duckdb"
+    store = MarketStore(source)
+    try:
+        store.replace_assets(
+            [
+                Asset(
+                    rank=1,
+                    symbol="BTC",
+                    coingecko_id="bitcoin",
+                    binance_pair="BTCUSDT",
+                    coinbase_product_id="BTC-USD",
+                    active=True,
+                    as_of_date=date(2026, 7, 2),
+                )
+            ],
+            date(2026, 7, 2),
+        )
+        store.upsert_state(
+            SyncState(
+                symbol="BTC",
+                interval="1d",
+                backfill_complete=True,
+                earliest_at=datetime(2020, 1, 1, tzinfo=UTC),
+                latest_at=datetime(2026, 7, 1, tzinfo=UTC),
+                last_refresh_at=datetime(2026, 7, 2, tzinfo=UTC),
+            )
+        )
+    finally:
+        store.close()
+
+    restored = MarketStore.restore(source, dest)
+    assert restored == dest.resolve()
+    check = MarketStore(dest)
+    try:
+        assert check.active_assets()[0].symbol == "BTC"
+        complete, total = check.daily_backfill_stats()
+        assert complete == 1 and total == 1
+        assert check.onchain_max_date(metric="mvrv", source="bitcoinisdata") is None
+    finally:
+        check.close()
+
+    with pytest.raises(FileExistsError):
+        MarketStore.restore(source, dest, force=False)
+    MarketStore.restore(source, dest, force=True)
+
+    with pytest.raises(ValueError, match="same path"):
+        MarketStore.restore(source, source, force=True)
+
+    empty = tmp_path / "empty.duckdb"
+    duckdb.connect(str(empty)).close()
+    with pytest.raises(ValueError, match="missing assets"):
+        MarketStore.restore(empty, tmp_path / "other.duckdb")
 

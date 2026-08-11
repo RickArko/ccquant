@@ -29,6 +29,8 @@ CLI entry point is `ccquant` (`ccquant.cli:main`), a Typer app with subcommands:
 
 ```bash
 uv run ccquant sync all                    # one-command update: universe + daily + hourly + status
+uv run ccquant sync bootstrap --from-backup PATH [--force-restore] [--dry-run] [--allow-bid] [--with-wallets]
+uv run ccquant sync bootstrap --cold [--force-cold] [--dry-run] [-c config/lean.yaml]
 uv run ccquant sync universe [--size N] [--config FILE]   # fetch top-cap universe + probe exchange pairs
 uv run ccquant sync backfill --interval {1d|1h} [--top N] [--full|--tail] [--force] [--config FILE]
 uv run ccquant sync oi [--interval {1d|1h}] [--top N] [--full|--tail]   # open interest (Binance+Bybit+OKX)
@@ -47,9 +49,10 @@ uv run ccquant wallet import-extract --source bigquery --chain bitcoin
 uv run ccquant wallet resolve-sns mitch.sol
 uv run ccquant wallet alerts --since 1
 uv run ccquant db backup [--dest DIR] [--keep N]  # timestamped file-copy backup
+uv run ccquant db restore --source PATH [--force]  # restore backup into CCQUANT_DB / config path
 uv run ccquant status
 uv run ccquant dashboard [--out PATH] [--no-open] [--live-range 1h] [--live-interval 5m] [--no-live]  # Market Tracker HTML (+ candle tape)
-uv run ccquant sync onchain                              # blockchain.info + BID valuation
+uv run ccquant sync onchain [--force]                    # blockchain.info + BID (skips when fresh unless --force)
 uv run ccquant sync etf                                  # Farside BTC ETF flows + Yahoo MSTR
 uv run ccquant research run --strategy cs_mom_simple     # multi-year CS momentum (panel: daily)
 uv run ccquant research run --strategy cs_mom_long_only  # CS mom long-only
@@ -80,6 +83,12 @@ not re-pulling full history), then OI + macro + wallets, then `dbt snapshot`
 (SCD2 `snap_assets` → `dim_assets_history`) and `dbt build` to rebuild
 marts/signals/events. Use it for routine updates. Use `--no-dbt` to skip the
 dbt step (e.g. when dbt isn't installed). Use `--no-wallets` to skip wallet sync.
+
+On a **new machine**, prefer `sync bootstrap --from-backup` (see
+[`documentation/Machine_Setup.md`](documentation/Machine_Setup.md)). Empty-DB
+`sync all` still does a full daily history pull when `backfill_complete` is
+false. Bootstrap keeps paid BID and wallet HEAVY_IO off unless `--allow-bid` /
+`--with-wallets`.
 
 `sync universe` marks all previously active assets inactive before inserting the new set.
 

@@ -13,10 +13,12 @@ from ccquant.sources import (
     fetch_binance_oi,
     fetch_bybit_depth,
     fetch_bybit_oi,
+    fetch_coingecko_daily,
     fetch_defillama_prices,
     fetch_fred_series,
     fetch_okx_depth,
     fetch_okx_oi,
+    fetch_top_markets,
 )
 
 KLINE_ROW = [
@@ -422,4 +424,55 @@ async def test_fetch_defillama_prices_parses_response() -> None:
     assert points[0].symbol == "BTC"
     assert points[0].price_usd == 65000.0
     assert points[0].venue == "defillama"
+
+
+@pytest.mark.asyncio
+async def test_fetch_top_markets_sends_demo_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CG_DEMO_API_KEY", "demo-test-key")
+    request = httpx.Request("GET", "https://api.coingecko.com/api/v3/coins/markets")
+    payload = [{"symbol": "btc", "id": "bitcoin"}]
+    mock_get = AsyncMock(
+        return_value=httpx.Response(200, json=payload, request=request)
+    )
+    async with httpx.AsyncClient() as client:
+        with patch.object(client, "get", mock_get):
+            markets = await fetch_top_markets(client, size=1)
+    assert markets[0]["symbol"] == "BTC"
+    assert mock_get.await_args is not None
+    assert mock_get.await_args.kwargs["headers"]["x-cg-demo-api-key"] == (
+        "demo-test-key"
+    )
+
+
+@pytest.mark.asyncio
+async def test_fetch_coingecko_daily_sends_demo_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CG_DEMO_API_KEY", "demo-test-key")
+    request = httpx.Request(
+        "GET", "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart/range"
+    )
+    payload = {
+        "prices": [[1719792000000, 60000.0]],
+        "total_volumes": [[1719792000000, 1000.0]],
+    }
+    mock_get = AsyncMock(
+        return_value=httpx.Response(200, json=payload, request=request)
+    )
+    async with httpx.AsyncClient() as client:
+        with patch.object(client, "get", mock_get):
+            candles = await fetch_coingecko_daily(
+                client,
+                symbol="BTC",
+                coingecko_id="bitcoin",
+                start=date(2024, 7, 1),
+                end=date(2024, 7, 1),
+            )
+    assert len(candles) == 1
+    assert mock_get.await_args is not None
+    assert mock_get.await_args.kwargs["headers"]["x-cg-demo-api-key"] == (
+        "demo-test-key"
+    )
 
