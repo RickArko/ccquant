@@ -15,7 +15,8 @@ uv run python -m ipykernel install --user --name=ccquant --display-name="Python 
 uv run pre-commit install
 
 # Sync Database
-ccquant sync all                     # universe + OHLCV + OI + depth + MEV + macro + wallets + dbt
+# full universe + OHLCV + OI + depth + MEV + macro + wallets + dbt
+ccquant sync all
 ccquant sync universe --size 100
 ccquant sync backfill --interval 1d
 # If history looks too short (e.g. after a geo-blocked Binance run marked complete):
