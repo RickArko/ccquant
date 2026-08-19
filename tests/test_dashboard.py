@@ -226,6 +226,52 @@ def test_larsson_regime_bands_collapses_runs() -> None:
     ]
 
 
+def test_pres_cycle_year_almanac_numbering() -> None:
+    from ccquant.dashboard import _pres_cycle_year
+
+    assert _pres_cycle_year(2024) == 4
+    assert _pres_cycle_year(2025) == 1
+    assert _pres_cycle_year(2026) == 2
+    assert _pres_cycle_year(2027) == 3
+    assert _pres_cycle_year(2028) == 4
+
+
+def test_halving_overlay_marks_subsidy_cuts() -> None:
+    from ccquant.dashboard import _halving_overlay
+
+    hv = _halving_overlay()
+    events = hv["events"]
+    assert isinstance(events, list)
+    by_id = {e["id"]: e for e in events if isinstance(e, dict)}
+    assert by_id["H1"]["date"] == "2012-11-28"
+    assert by_id["H4"]["date"] == "2024-04-20"
+    assert by_id["H4"]["label"] == "Halving 2024"
+    assert by_id["H5"]["estimated"] is True
+    epochs = hv["epochs"]
+    assert isinstance(epochs, list)
+    assert len(epochs) == 5
+    last = epochs[-1]
+    assert isinstance(last, dict)
+    assert last["start"] == "2024-04-20"
+    assert last["reward"] == "3.125 BTC"
+
+
+def test_presidential_overlay_terms_and_elections() -> None:
+    from ccquant.dashboard import _presidential_overlay
+
+    pc = _presidential_overlay(until=date(2026, 8, 19))
+    years = {b["year"]: b for b in pc["years"] if isinstance(b, dict)}
+    assert years[2024]["cycle"] == 4
+    assert years[2024]["short"] == "Y4"
+    assert years[2026]["label"] == "Y2 midterm"
+    admins = {a["label"]: a for a in pc["admins"] if isinstance(a, dict)}
+    assert admins["Trump II"]["start"] == "2025-01-20"
+    assert admins["Biden"]["end"] == "2025-01-20"
+    election_dates = {e["date"] for e in pc["elections"] if isinstance(e, dict)}
+    assert "2024-11-05" in election_dates
+    assert "2028-11-07" in election_dates
+
+
 def test_render_dashboard_html_contains_hero() -> None:
     pytest.importorskip("plotly")
     # Need warm-up length for SMA350 / Pi Cycle seed series.
@@ -243,7 +289,16 @@ def test_render_dashboard_html_contains_hero() -> None:
     assert 'id="lt-ind-sma"' in page
     assert 'id="lt-ind-pi"' in page
     assert 'id="lt-ind-larsson"' in page
+    assert 'id="lt-ind-halving"' in page
+    assert 'id="lt-ind-pres"' in page
     assert 'id="lt-ind-clear"' in page
+    assert 'id="lt-cycle-legend"' in page
+    assert "halvingShapes" in page
+    assert "presShapes" in page
+    assert "overlayAnnotations" in page
+    assert "updateCycleLegend" in page
+    assert "visibleMid" in page
+    assert "captureevents" in page
     assert "sma50" in page
     assert "pi350x2" in page
     assert "larsson_bull" in page
@@ -280,10 +335,32 @@ def test_render_dashboard_html_contains_hero() -> None:
     assert seed["length_starts"]["2y"] < seed["dates"][-1]
     assert "open" in seed and "high" in seed
     assert "monthly" in seed and "larsson_bands" in seed["monthly"]
+    assert "halvings" in seed and "pres_cycle" in seed
+    hv = seed["halvings"]
+    assert isinstance(hv, dict)
+    events = hv["events"]
+    assert isinstance(events, list)
+    event_dates = {e["date"] for e in events if isinstance(e, dict)}
+    assert "2012-11-28" in event_dates
+    assert "2024-04-20" in event_dates
+    assert any(isinstance(e, dict) and e.get("estimated") for e in events)
+    epochs = hv["epochs"]
+    assert isinstance(epochs, list) and len(epochs) == 5
+    pc = seed["pres_cycle"]
+    assert isinstance(pc, dict)
+    years = {b["year"]: b["cycle"] for b in pc["years"] if isinstance(b, dict)}
+    assert years[2024] == 4
+    assert years[2025] == 1
+    assert years[2026] == 2
+    admin_labels = {a["label"] for a in pc["admins"] if isinstance(a, dict)}
+    assert "Trump II" in admin_labels
+    assert "Biden" in admin_labels
     # Toggles default unchecked
     assert 'id="lt-ind-sma" checked' not in page
     assert 'id="lt-ind-pi" checked' not in page
     assert 'id="lt-ind-larsson" checked' not in page
+    assert 'id="lt-ind-halving" checked' not in page
+    assert 'id="lt-ind-pres" checked' not in page
 
 
 def test_render_dashboard_html_includes_live_tape() -> None:

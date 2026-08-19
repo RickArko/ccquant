@@ -74,6 +74,41 @@ MONTH_LABELS: tuple[str, ...] = (
 # Cap |return| for the diverging colorscale so a few outliers don't flatten
 # the rest of the calendar (values still shown in cell text / hover).
 HEATMAP_RET_CAP_PCT = 40.0
+# Bitcoin subsidy cuts (blocks 210k / 420k / 630k / 840k). H5 is 210k blocks
+# after H4 at a 10-minute average and is labeled as an estimate.
+BTC_GENESIS = date(2009, 1, 3)
+BTC_HALVINGS: tuple[tuple[date, str], ...] = (
+    (date(2012, 11, 28), "50 → 25 BTC"),
+    (date(2016, 7, 9), "25 → 12.5 BTC"),
+    (date(2020, 5, 11), "12.5 → 6.25 BTC"),
+    (date(2024, 4, 20), "6.25 → 3.125 BTC"),
+)
+NEXT_HALVING_EST = date(2028, 4, 17)
+# Stock Trader's Almanac presidential cycle: Y4 = US election year (year % 4
+# == 0), then Y1 post-election, Y2 midterm, Y3 pre-election.
+PRES_CYCLE_LABELS: tuple[str, ...] = (
+    "Y1 post-election",
+    "Y2 midterm",
+    "Y3 pre-election",
+    "Y4 election",
+)
+# Inauguration-to-inauguration (20 Jan). Covers BTC's traded history.
+US_ADMINS: tuple[tuple[date, date, str], ...] = (
+    (date(2009, 1, 20), date(2013, 1, 20), "Obama I"),
+    (date(2013, 1, 20), date(2017, 1, 20), "Obama II"),
+    (date(2017, 1, 20), date(2021, 1, 20), "Trump I"),
+    (date(2021, 1, 20), date(2025, 1, 20), "Biden"),
+    (date(2025, 1, 20), date(2029, 1, 20), "Trump II"),
+)
+# First Tuesday after the first Monday in November.
+US_ELECTION_DATES: tuple[date, ...] = (
+    date(2008, 11, 4),
+    date(2012, 11, 6),
+    date(2016, 11, 8),
+    date(2020, 11, 3),
+    date(2024, 11, 5),
+    date(2028, 11, 7),
+)
 
 
 def _to_tz(dt: datetime, tz: ZoneInfo) -> datetime:
@@ -1039,6 +1074,90 @@ def _larsson_regime_bands(
     return bands
 
 
+def _pres_cycle_year(year: int) -> int:
+    """1=post-election, 2=midterm, 3=pre-election, 4=election (year % 4 == 0)."""
+    remainder = year % 4
+    return 4 if remainder == 0 else remainder
+
+
+def _halving_overlay() -> dict[str, object]:
+    """Halving events + subsidy-epoch bands for the long-term chart overlay."""
+    events: list[dict[str, object]] = []
+    for i, (when, detail) in enumerate(BTC_HALVINGS):
+        events.append(
+            {
+                "date": when.isoformat(),
+                "id": f"H{i + 1}",
+                "year": when.year,
+                "label": f"Halving {when.year}",
+                "short": f"H{when.year}",
+                "detail": detail,
+                "estimated": False,
+            }
+        )
+    events.append(
+        {
+            "date": NEXT_HALVING_EST.isoformat(),
+            "id": "H5",
+            "year": NEXT_HALVING_EST.year,
+            "label": f"Halving ~{NEXT_HALVING_EST.year}",
+            "short": "H5",
+            "detail": "3.125 → 1.5625 BTC (est.)",
+            "estimated": True,
+        }
+    )
+    epoch_starts = [BTC_GENESIS, *[when for when, _ in BTC_HALVINGS]]
+    epoch_ends = [when for when, _ in BTC_HALVINGS] + [NEXT_HALVING_EST]
+    epoch_rewards = ("50 BTC", "25 BTC", "12.5 BTC", "6.25 BTC", "3.125 BTC")
+    epochs: list[dict[str, object]] = []
+    for i, (start, end, reward) in enumerate(
+        zip(epoch_starts, epoch_ends, epoch_rewards, strict=True)
+    ):
+        epochs.append(
+            {
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "id": f"E{i}",
+                "reward": reward,
+                "label": f"{reward} epoch",
+                "short": reward,
+            }
+        )
+    return {"events": events, "epochs": epochs}
+
+
+def _presidential_overlay(*, until: date) -> dict[str, object]:
+    """US 4-year cycle year bands, administrations, and election markers."""
+    start_year = 2009
+    end_year = max(until.year + 1, 2029)
+    years: list[dict[str, object]] = []
+    for year in range(start_year, end_year + 1):
+        cycle = _pres_cycle_year(year)
+        years.append(
+            {
+                "start": date(year, 1, 1).isoformat(),
+                "end": date(year + 1, 1, 1).isoformat(),
+                "year": year,
+                "cycle": cycle,
+                "label": PRES_CYCLE_LABELS[cycle - 1],
+                "short": f"Y{cycle}",
+            }
+        )
+    admins = [
+        {
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "label": name,
+        }
+        for start, end, name in US_ADMINS
+    ]
+    elections = [
+        {"date": when.isoformat(), "label": f"{when.year} election"}
+        for when in US_ELECTION_DATES
+    ]
+    return {"years": years, "admins": admins, "elections": elections}
+
+
 def _larsson_series(
     dates: list[str],
     highs: list[float],
@@ -1144,6 +1263,8 @@ def _long_term_indicator_seed(snapshot: MarketSnapshot) -> dict[str, object]:
         "larsson_neutral": larsson["larsson_neutral"],
         "larsson_state": larsson["larsson_state"],
         "larsson_bands": larsson["larsson_bands"],
+        "halvings": _halving_overlay(),
+        "pres_cycle": _presidential_overlay(until=end or date.today()),
         "monthly": {
             "dates": m_iso,
             "open": list(m_o),
@@ -1230,10 +1351,23 @@ def render_dashboard_html(
             <input type="checkbox" id="lt-ind-larsson" /> Larsson Line
           </label>
           <button type="button" class="live-btn lt-ind-clear" id="lt-ind-clear"
-                  title="Turn off all indicator overlays">Clear</button>
+                  title="Turn off all indicator and cycle overlays">Clear</button>
+        </div>
+        <div class="lt-ind-group lt-cycle-group" id="lt-cycles"
+             aria-label="Cycle overlays">
+          <label class="lt-ind"
+                 title="Shade subsidy epochs and mark Bitcoin halving dates">
+            <input type="checkbox" id="lt-ind-halving" /> Halvings
+          </label>
+          <label class="lt-ind"
+                 title="Mark the 4-year US presidential cycle (Y1–Y4)">
+            <input type="checkbox" id="lt-ind-pres" /> Pres. cycle
+          </label>
         </div>
         <span class="live-chart-label" id="lt-ind-status"></span>
       </div>
+      <div class="lt-cycle-legend" id="lt-cycle-legend" hidden
+           aria-live="polite"></div>
       <div id="lt-plot" class="lt-daily-plot"></div>
       <script type="application/json" id="lt-seed">{lt_seed_json}</script>
 """
@@ -1415,9 +1549,15 @@ def render_dashboard_html(
   const plotEl = document.getElementById("lt-plot");
   const seedEl = document.getElementById("lt-seed");
   const statusEl = document.getElementById("lt-ind-status");
+  const legendEl = document.getElementById("lt-cycle-legend");
   const smaCb = document.getElementById("lt-ind-sma");
   const piCb = document.getElementById("lt-ind-pi");
   const larssonCb = document.getElementById("lt-ind-larsson");
+  const halvingCb = document.getElementById("lt-ind-halving");
+  const presCb = document.getElementById("lt-ind-pres");
+  const narrowMq = window.matchMedia
+    ? window.matchMedia("(max-width: 720px)")
+    : null;
   if (!bars || !styles || !lengths || !plotEl || !seedEl) return;
   if (typeof Plotly === "undefined") return;
 
@@ -1492,6 +1632,109 @@ def render_dashboard_html(
     return [Math.log10(padded[0]), Math.log10(padded[1])];
   }
 
+  function isNarrow() {
+    return !!(narrowMq && narrowMq.matches);
+  }
+
+  function toTime(v) {
+    const k = dateKey(v);
+    const t = Date.parse(k + "T00:00:00Z");
+    return Number.isFinite(t) ? t : NaN;
+  }
+
+  function overlaps(start, end, x0, x1) {
+    if (x0 == null || x1 == null) return true;
+    return toTime(start) <= toTime(x1) && toTime(end) >= toTime(x0);
+  }
+
+  function inRange(d, x0, x1) {
+    if (x0 == null || x1 == null) return true;
+    const t = toTime(d);
+    return t >= toTime(x0) && t <= toTime(x1);
+  }
+
+  function covering(items, asOf) {
+    if (!asOf || !items || !items.length) return null;
+    const k = dateKey(asOf);
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (it.start <= k && k < it.end) return it;
+    }
+    return null;
+  }
+
+  function visibleMid(start, end, x0, x1) {
+    const lo = (x0 == null) ? toTime(start) : Math.max(toTime(start), toTime(x0));
+    const hi = (x1 == null) ? toTime(end) : Math.min(toTime(end), toTime(x1));
+    if (!(lo < hi) || !Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+    return new Date((lo + hi) / 2).toISOString().slice(0, 10);
+  }
+
+  function visibleDays(start, end, x0, x1) {
+    const lo = (x0 == null) ? toTime(start) : Math.max(toTime(start), toTime(x0));
+    const hi = (x1 == null) ? toTime(end) : Math.min(toTime(end), toTime(x1));
+    if (!(lo < hi) || !Number.isFinite(lo) || !Number.isFinite(hi)) return 0;
+    return (hi - lo) / 86400000;
+  }
+
+  const EPOCH_FILL = [
+    "rgba(255,255,255,0.04)",
+    "rgba(0,188,212,0.12)",
+    "rgba(38,166,154,0.12)",
+    "rgba(94,114,228,0.13)",
+    "rgba(247,147,26,0.13)"
+  ];
+  const PRES_FILL = {
+    1: "rgba(176,191,198,0.18)",
+    2: "rgba(255,202,40,0.14)",
+    3: "rgba(102,187,106,0.16)",
+    4: "rgba(239,83,80,0.14)"
+  };
+  const PRES_SHORT = {
+    1: "Y1 post",
+    2: "Y2 mid",
+    3: "Y3 pre",
+    4: "Y4 elect"
+  };
+
+  function fadeRgba(color, factor) {
+    const m = String(color).match(
+      /^rgba\\((\\d+),\\s*(\\d+),\\s*(\\d+),\\s*([\\d.]+)\\)$/
+    );
+    if (!m) return color;
+    return "rgba(" + m[1] + "," + m[2] + "," + m[3] + ","
+      + (Number(m[4]) * factor) + ")";
+  }
+
+  function vline(x, color, dash, width) {
+    return {
+      type: "line",
+      xref: "x",
+      yref: "paper",
+      x0: x,
+      x1: x,
+      y0: 0,
+      y1: 1,
+      line: { color: color, width: width || 1.2, dash: dash || "dash" },
+      layer: "above"
+    };
+  }
+
+  function domainRect(x0, x1, y0, y1, fill) {
+    return {
+      type: "rect",
+      xref: "x",
+      yref: "y domain",
+      x0: x0,
+      x1: x1,
+      y0: y0,
+      y1: y1,
+      fillcolor: fill,
+      line: { width: 0 },
+      layer: "below"
+    };
+  }
+
   function larssonShapes(bands) {
     if (!bands || !bands.length) return [];
     return bands.map(function (b) {
@@ -1509,6 +1752,260 @@ def render_dashboard_html(
         layer: "below"
       };
     });
+  }
+
+  function halvingShapes(xr, faded) {
+    const hv = seed.halvings || {};
+    const shapes = [];
+    const epochs = hv.epochs || [];
+    const factor = faded ? 0.55 : 1;
+    for (let i = 0; i < epochs.length; i++) {
+      const e = epochs[i];
+      if (xr && !overlaps(e.start, e.end, xr[0], xr[1])) continue;
+      shapes.push(domainRect(
+        e.start, e.end, 0, 1,
+        fadeRgba(EPOCH_FILL[i % EPOCH_FILL.length], factor)
+      ));
+    }
+    const events = hv.events || [];
+    for (let i = 0; i < events.length; i++) {
+      const ev = events[i];
+      if (xr && !inRange(ev.date, xr[0], xr[1])) continue;
+      shapes.push(vline(
+        ev.date,
+        ev.estimated ? "rgba(128,222,234,0.55)" : "#80deea",
+        ev.estimated ? "dot" : "dash",
+        ev.estimated ? 1.1 : 1.5
+      ));
+    }
+    return shapes;
+  }
+
+  function presShapes(xr, asStrip) {
+    const pc = seed.pres_cycle || {};
+    const shapes = [];
+    const y0 = asStrip ? 0.935 : 0;
+    const years = pc.years || [];
+    for (let i = 0; i < years.length; i++) {
+      const y = years[i];
+      if (xr && !overlaps(y.start, y.end, xr[0], xr[1])) continue;
+      shapes.push(domainRect(
+        y.start, y.end, y0, 1,
+        PRES_FILL[y.cycle] || PRES_FILL[1]
+      ));
+    }
+    if (asStrip && xr) {
+      shapes.push({
+        type: "rect",
+        xref: "x",
+        yref: "y domain",
+        x0: xr[0],
+        x1: xr[1],
+        y0: y0,
+        y1: 1,
+        fillcolor: "rgba(0,0,0,0)",
+        line: { color: "rgba(232,230,225,0.22)", width: 1 },
+        layer: "above"
+      });
+    }
+    const admins = pc.admins || [];
+    for (let i = 0; i < admins.length; i++) {
+      const a = admins[i];
+      if (xr && !inRange(a.start, xr[0], xr[1])) continue;
+      shapes.push(vline(a.start, "rgba(207,216,220,0.72)", "dash", 1.2));
+    }
+    const elections = pc.elections || [];
+    for (let i = 0; i < elections.length; i++) {
+      const e = elections[i];
+      if (xr && !inRange(e.date, xr[0], xr[1])) continue;
+      shapes.push(vline(e.date, "rgba(239,83,80,0.55)", "dot", 1));
+    }
+    return shapes;
+  }
+
+  function overlayShapes(series, xr) {
+    const showLarsson = !!(larssonCb && larssonCb.checked);
+    const showHalving = !!(halvingCb && halvingCb.checked);
+    const showPres = !!(presCb && presCb.checked);
+    const shapes = [];
+    if (showHalving) {
+      shapes.push.apply(shapes, halvingShapes(xr, showLarsson));
+    }
+    if (showPres) {
+      shapes.push.apply(shapes, presShapes(xr, showHalving || showLarsson));
+    }
+    if (showLarsson) {
+      shapes.push.apply(shapes, larssonShapes(series.larsson_bands));
+    }
+    return shapes;
+  }
+
+  function overlayAnnotations(xr) {
+    if (isNarrow()) return [];
+    const anns = [];
+    const showHalving = !!(halvingCb && halvingCb.checked);
+    const showPres = !!(presCb && presCb.checked);
+    const showLarsson = !!(larssonCb && larssonCb.checked);
+    const asStrip = showHalving || showLarsson;
+    if (showHalving) {
+      const epochs = ((seed.halvings || {}).epochs) || [];
+      for (let i = 0; i < epochs.length; i++) {
+        const e = epochs[i];
+        if (xr && !overlaps(e.start, e.end, xr[0], xr[1])) continue;
+        if (visibleDays(e.start, e.end, xr && xr[0], xr && xr[1]) < 90) continue;
+        const mid = visibleMid(e.start, e.end, xr && xr[0], xr && xr[1]);
+        if (!mid) continue;
+        anns.push({
+          x: mid,
+          y: 0.04,
+          yref: "paper",
+          text: e.short,
+          showarrow: false,
+          xanchor: "center",
+          yanchor: "bottom",
+          font: { size: 10, color: "#b2ebf2" },
+          bgcolor: "rgba(18,20,26,0.55)",
+          borderpad: 2,
+          captureevents: false
+        });
+      }
+      const events = ((seed.halvings || {}).events) || [];
+      for (let i = 0; i < events.length; i++) {
+        const ev = events[i];
+        if (xr && !inRange(ev.date, xr[0], xr[1])) continue;
+        anns.push({
+          x: ev.date,
+          y: 1,
+          yref: "paper",
+          text: ev.label,
+          textangle: -90,
+          showarrow: false,
+          xanchor: "right",
+          yanchor: "top",
+          xshift: -4,
+          yshift: -6,
+          font: { size: 10, color: "#b2ebf2" },
+          bgcolor: "rgba(18,20,26,0.62)",
+          borderpad: 2,
+          captureevents: false
+        });
+      }
+    }
+    if (showPres) {
+      const years = ((seed.pres_cycle || {}).years) || [];
+      for (let i = 0; i < years.length; i++) {
+        const y = years[i];
+        if (xr && !overlaps(y.start, y.end, xr[0], xr[1])) continue;
+        if (visibleDays(y.start, y.end, xr && xr[0], xr && xr[1]) < 50) continue;
+        const mid = visibleMid(y.start, y.end, xr && xr[0], xr && xr[1]);
+        if (!mid) continue;
+        anns.push({
+          x: mid,
+          y: asStrip ? 0.968 : 0.97,
+          yref: "paper",
+          text: y.short,
+          showarrow: false,
+          xanchor: "center",
+          yanchor: "middle",
+          font: { size: 9, color: asStrip ? "#e8e6e1" : "#cfd8dc" },
+          bgcolor: asStrip ? "rgba(18,20,26,0.35)" : "rgba(18,20,26,0.45)",
+          borderpad: 1,
+          captureevents: false
+        });
+      }
+      const admins = ((seed.pres_cycle || {}).admins) || [];
+      for (let i = 0; i < admins.length; i++) {
+        const a = admins[i];
+        if (xr && !inRange(a.start, xr[0], xr[1])) continue;
+        anns.push({
+          x: a.start,
+          y: 1,
+          yref: "paper",
+          text: a.label,
+          showarrow: false,
+          xanchor: "left",
+          yanchor: "bottom",
+          xshift: 5,
+          yshift: 2,
+          font: { size: 10, color: "#cfd8dc" },
+          captureevents: false
+        });
+      }
+    }
+    return anns;
+  }
+
+  function swatch(color) {
+    const s = document.createElement("span");
+    s.className = "lt-swatch";
+    s.style.background = color;
+    return s;
+  }
+
+  function legendItem(color, text) {
+    const item = document.createElement("span");
+    item.className = "lt-legend-item";
+    if (color) item.appendChild(swatch(color));
+    item.appendChild(document.createTextNode(text));
+    return item;
+  }
+
+  function updateCycleLegend(series, xr) {
+    if (!legendEl) return;
+    const showHalving = !!(halvingCb && halvingCb.checked);
+    const showPres = !!(presCb && presCb.checked);
+    while (legendEl.firstChild) legendEl.removeChild(legendEl.firstChild);
+    if (!showHalving && !showPres) {
+      legendEl.hidden = true;
+      return;
+    }
+    legendEl.hidden = false;
+    const dates = series.dates || [];
+    const asOf = (xr && xr[1]) || dates[dates.length - 1];
+    if (showHalving) {
+      const epochs = ((seed.halvings || {}).epochs) || [];
+      const cur = covering(epochs, asOf);
+      if (cur) {
+        const idx = epochs.indexOf(cur);
+        const span = isNarrow()
+          ? cur.label
+          : (cur.label + " · " + cur.start.slice(0, 4) + "–" + cur.end.slice(0, 4));
+        legendEl.appendChild(legendItem(
+          EPOCH_FILL[Math.max(idx, 0) % EPOCH_FILL.length],
+          span
+        ));
+      }
+      const events = ((seed.halvings || {}).events) || [];
+      const inWin = events.filter(function (ev) {
+        return !xr || inRange(ev.date, xr[0], xr[1]);
+      });
+      if (inWin.length) {
+        legendEl.appendChild(legendItem(
+          null,
+          inWin.map(function (ev) {
+            return ev.estimated ? (ev.label + " (est.)") : ev.label;
+          }).join(" · ")
+        ));
+      }
+    }
+    if (showPres) {
+      const keyRow = document.createElement("span");
+      keyRow.className = "lt-legend-key";
+      [1, 2, 3, 4].forEach(function (c) {
+        keyRow.appendChild(legendItem(PRES_FILL[c], PRES_SHORT[c]));
+      });
+      legendEl.appendChild(keyRow);
+      const y = covering(((seed.pres_cycle || {}).years) || [], asOf);
+      const admin = covering(((seed.pres_cycle || {}).admins) || [], asOf);
+      const parts = [];
+      if (y) parts.push(String(y.year) + " " + (isNarrow() ? y.short : y.label));
+      if (admin) parts.push(admin.label);
+      if (parts.length) {
+        const now = legendItem(null, parts.join(" · "));
+        now.className += " lt-legend-now";
+        legendEl.appendChild(now);
+      }
+    }
   }
 
   function visiblePriceBounds(series, x0, x1) {
@@ -1560,6 +2057,13 @@ def render_dashboard_html(
     if (larssonCb && larssonCb.checked) {
       const st = series.larsson_state || null;
       bits.push(st ? ("Larsson: " + st) : "Larsson Line");
+    }
+    if (halvingCb && halvingCb.checked) bits.push("Halvings");
+    if (presCb && presCb.checked) {
+      const dates = series.dates || [];
+      const asOf = (xRange && xRange[1]) || dates[dates.length - 1];
+      const y = covering(((seed.pres_cycle || {}).years) || [], asOf);
+      bits.push(y ? ("Pres " + y.short) : "Pres. cycle");
     }
     bits.push(barMode === "monthly" ? "monthly" : "daily");
     bits.push(styleMode);
@@ -1688,11 +2192,15 @@ def render_dashboard_html(
   function layout(series) {
     const xr = ensureXRange();
     const yb = xr ? visiblePriceBounds(series, xr[0], xr[1]) : null;
-    const showLarsson = !!(larssonCb && larssonCb.checked);
+    const showHalving = !!(halvingCb && halvingCb.checked);
+    const showPres = !!(presCb && presCb.checked);
+    const desktopAnns = !isNarrow() && (showHalving || showPres);
+    const top = (desktopAnns && showPres) ? 52 : 36;
+    updateCycleLegend(series, xr);
     return {
       template: "plotly_dark",
       height: 420,
-      margin: { l: 48, r: 24, t: 36, b: 24 },
+      margin: { l: 48, r: 24, t: top, b: 24 },
       title: {
         text: "BTC " + barMode + " — " + styleMode + " (" + lengthKey + ")",
         font: { size: 14 }
@@ -1710,12 +2218,17 @@ def render_dashboard_html(
         autorange: !yb,
         range: yb || undefined
       },
-      shapes: showLarsson ? larssonShapes(series.larsson_bands) : [],
+      shapes: overlayShapes(series, xr),
+      annotations: overlayAnnotations(xr),
       // Keep overlays from resetting zoom; length buttons own xRange.
       uirevision: barMode + ":" + styleMode + ":" + lengthKey,
       showlegend: true,
       legend: {
-        orientation: "h", y: 1.12, x: 0, font: { size: 10, color: "#9a958c" }
+        orientation: "h",
+        y: 1.12,
+        x: (showPres && desktopAnns) ? 1 : 0,
+        xanchor: (showPres && desktopAnns) ? "right" : "left",
+        font: { size: 10, color: "#9a958c" }
       },
       paper_bgcolor: "#12141a",
       plot_bgcolor: "#12141a",
@@ -1733,13 +2246,18 @@ def render_dashboard_html(
       xRange ? xRange[0] : null,
       xRange ? xRange[1] : null
     );
-    if (!bounds) return;
+    updateCycleLegend(series, xRange);
+    const payload = {
+      shapes: overlayShapes(series, xRange),
+      annotations: overlayAnnotations(xRange)
+    };
+    if (bounds) {
+      payload["yaxis.type"] = "log";
+      payload["yaxis.autorange"] = false;
+      payload["yaxis.range"] = bounds;
+    }
     syncingY = true;
-    Plotly.relayout(plotEl, {
-      "yaxis.type": "log",
-      "yaxis.autorange": false,
-      "yaxis.range": bounds
-    }).then(
+    Plotly.relayout(plotEl, payload).then(
       function () { syncingY = false; },
       function () { syncingY = false; }
     );
@@ -1797,18 +2315,26 @@ def render_dashboard_html(
     });
   });
 
-  [smaCb, piCb, larssonCb].forEach(function (el) {
+  [smaCb, piCb, larssonCb, halvingCb, presCb].forEach(function (el) {
     if (el) el.addEventListener("change", renderChart);
   });
 
   const clearBtn = document.getElementById("lt-ind-clear");
   if (clearBtn) {
     clearBtn.addEventListener("click", function () {
-      [smaCb, piCb, larssonCb].forEach(function (el) {
+      [smaCb, piCb, larssonCb, halvingCb, presCb].forEach(function (el) {
         if (el && !el.disabled) el.checked = false;
       });
       renderChart();
     });
+  }
+
+  if (narrowMq) {
+    if (typeof narrowMq.addEventListener === "function") {
+      narrowMq.addEventListener("change", renderChart);
+    } else if (typeof narrowMq.addListener === "function") {
+      narrowMq.addListener(renderChart);
+    }
   }
 
   setActiveGroup(lengths, "data-lt-length", lengthKey);
@@ -2568,6 +3094,8 @@ def render_dashboard_html(
       margin: 0 0 1.25rem;
       border-top: 1px solid var(--line);
       padding-top: 0.5rem;
+      min-width: 0;
+      overflow-x: hidden;
     }}
     .lt-toolbar {{
       display: flex;
@@ -2581,6 +3109,11 @@ def render_dashboard_html(
       flex-wrap: wrap;
       gap: 0.55rem 0.85rem;
       margin-left: 0.25rem;
+      align-items: center;
+    }}
+    .lt-ind-group + .lt-ind-group {{
+      padding-left: 0.65rem;
+      border-left: 1px solid var(--line);
     }}
     .lt-ind {{
       display: inline-flex;
@@ -2590,17 +3123,98 @@ def render_dashboard_html(
       color: var(--muted);
       cursor: pointer;
       user-select: none;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }}
+    .lt-ind:has(input:checked) {{
+      color: var(--fg);
     }}
     .lt-ind input {{
       accent-color: var(--accent);
       margin: 0;
     }}
+    .lt-cycle-legend {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.4rem 0.85rem;
+      min-height: 1.15rem;
+      margin: 0 0 0.45rem;
+      font-size: 0.72rem;
+      color: var(--muted);
+      line-height: 1.35;
+    }}
+    .lt-cycle-legend[hidden] {{
+      display: none !important;
+    }}
+    .lt-legend-item {{
+      display: inline-flex;
+      align-items: center;
+      gap: 0.28rem;
+      white-space: nowrap;
+    }}
+    .lt-legend-key {{
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 0.35rem 0.65rem;
+    }}
+    .lt-legend-now {{
+      color: var(--fg);
+    }}
+    .lt-swatch {{
+      display: inline-block;
+      width: 0.7rem;
+      height: 0.7rem;
+      border: 1px solid var(--line);
+      flex: 0 0 auto;
+    }}
     .lt-daily-plot {{
       width: 100%;
+      max-width: 100%;
       min-height: 420px;
+      overflow: hidden;
       background: #12141a;
     }}
     .lt-pane[hidden] {{ display: none !important; }}
+    @media (max-width: 720px) {{
+      .live-chart-label {{
+        margin-left: 0;
+        width: 100%;
+      }}
+      .lt-ind-group {{
+        margin-left: 0;
+      }}
+      .lt-ind-group + .lt-ind-group {{
+        padding-left: 0;
+        border-left: 0;
+        width: 100%;
+      }}
+      .lt-ind {{
+        min-height: 2.5rem;
+        padding: 0.3rem 0.5rem;
+        border: 1px solid var(--line);
+      }}
+      .lt-ind:has(input:checked) {{
+        color: var(--accent);
+        border-color: var(--accent);
+      }}
+      .lt-ind input {{
+        width: 1.05rem;
+        height: 1.05rem;
+      }}
+      .lt-legend-item {{
+        white-space: normal;
+      }}
+    }}
+    @media (max-width: 420px) {{
+      .lt-toolbar {{
+        gap: 0.35rem 0.4rem;
+      }}
+      .live-btn {{
+        padding: 0.32rem 0.42rem;
+        font-size: 0.68rem;
+      }}
+    }}
     .outlook {{
       border-top: 1px solid var(--line);
       padding-top: 1rem;
