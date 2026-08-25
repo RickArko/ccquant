@@ -3700,7 +3700,6 @@ def render_dashboard_html(
       {html.escape(snapshot.freshness_note)}{html.escape(gap_note)}
       · Regime-conditional research only —
       not a prediction.
-      Deep dive: <a href="../../notebooks/Market_Tracker.ipynb">Market_Tracker.ipynb</a>
       · Refresh: <code>uv run ccquant sync all</code>
       · Live tape polls Binance every 15s in-browser when allowed.
     </footer>
