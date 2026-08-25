@@ -44,3 +44,6 @@ Thumbs.db
 
 # AI plans (local working files)
 .ai/
+
+# Staged dashboard HTML (generated; never commit market snapshots)
+deploy/public/*.html

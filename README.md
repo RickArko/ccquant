@@ -229,4 +229,6 @@ bitcoinisdata.com / Glassnode for valuation metrics.
 ```bash
 uv run ccquant sync all          # universe + OHLCV + OI + depth + MEV + FRED + onchain + ETF + wallets + tweets + dbt
 uv run ccquant dashboard         # rewrite data/export/market_tracker.html
+make dashboard.deploy            # stage HTML + check + Fly
+# runbook: documentation/Dashboard_Deploy.md
 ```

@@ -3322,6 +3322,7 @@ def render_dashboard_html(
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ccquant — Market Tracker</title>
+  <link rel="canonical" href="https://btc.rickarko.com/" />
   <style>
     :root {{
       --bg: #0e1014;

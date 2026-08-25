@@ -1,0 +1,4 @@
+# Static nginx image only copies deploy/. Keep secrets and DuckDB off the builder.
+*
+!deploy/
+!deploy/**

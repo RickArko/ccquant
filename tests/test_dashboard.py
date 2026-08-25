@@ -583,6 +583,7 @@ def test_render_dashboard_html_contains_hero() -> None:
     snap = build_snapshot_from_panels(_synthetic_daily(n_days=400))
     page = render_dashboard_html(snap)
     assert "ccquant" in page
+    assert '<link rel="canonical" href="https://btc.rickarko.com/" />' in page
     assert snap.headline in page
     assert "Outlook" in page
     assert "BTC close" in page or "BTC daily" in page
