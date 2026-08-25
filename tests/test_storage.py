@@ -72,6 +72,59 @@ def test_store_assets_and_ohlcv(tmp_path) -> None:
         status = store.status_rows()
         assert status[0]["daily_rows"] == 1
         assert status[0]["hourly_rows"] == 1
+        assert status[0]["daily_holes"] == 0
+    finally:
+        store.close()
+
+
+def test_status_rows_counts_interior_daily_holes(tmp_path) -> None:
+    store = MarketStore(tmp_path / "ccquant.duckdb")
+    try:
+        as_of = date(2026, 7, 26)
+        store.replace_assets(
+            [
+                Asset(
+                    rank=1,
+                    symbol="BTC",
+                    coingecko_id="bitcoin",
+                    binance_pair="BTCUSDT",
+                    coinbase_product_id="BTC-USD",
+                    active=True,
+                    as_of_date=as_of,
+                )
+            ],
+            as_of,
+        )
+        store.upsert_daily(
+            [
+                DailyOhlcv(
+                    symbol="BTC",
+                    date=date(2026, 7, 18),
+                    open=1.0,
+                    high=1.0,
+                    low=1.0,
+                    close=1.0,
+                    volume=1.0,
+                    source="coinbase",
+                ),
+                DailyOhlcv(
+                    symbol="BTC",
+                    date=date(2026, 7, 26),
+                    open=1.0,
+                    high=1.0,
+                    low=1.0,
+                    close=1.0,
+                    volume=1.0,
+                    source="coinbase",
+                ),
+            ]
+        )
+        status = store.status_rows()
+        assert status[0]["daily_holes"] == 7
+        assert store.daily_dates_since("BTC", date(2026, 7, 1)) == [
+            date(2026, 7, 18),
+            date(2026, 7, 26),
+        ]
     finally:
         store.close()
 

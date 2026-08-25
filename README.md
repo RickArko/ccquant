@@ -219,3 +219,11 @@ bitcoinisdata.com / Glassnode for valuation metrics.
 > Run the notebooks interactively for full hover tooltips, range sliders, and
 > live data. See [`documentation/API_Pricing.md`](documentation/API_Pricing.md)
 > for data source setup and API key configuration.
+
+
+## Dashboard Update
+
+```bash
+uv run ccquant sync all          # universe + OHLCV + OI + depth + MEV + FRED + onchain + ETF + wallets + tweets + dbt
+uv run ccquant dashboard         # rewrite data/export/market_tracker.html
+```

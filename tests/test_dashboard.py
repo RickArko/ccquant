@@ -313,6 +313,99 @@ def test_extend_daily_panel_with_raw_appends_newer_btc() -> None:
     assert btc["close"][-1] == pytest.approx(2.0)
 
 
+def test_extend_daily_panel_with_raw_fills_interior_hole() -> None:
+    from ccquant.dashboard import _extend_daily_panel_with_raw
+
+    cols = ["symbol", "date", "open", "high", "low", "close", "volume", "source"]
+    mart = pl.DataFrame(
+        [
+            {
+                "symbol": "BTC",
+                "date": date(2026, 7, 18),
+                "open": 1.0,
+                "high": 1.0,
+                "low": 1.0,
+                "close": 1.0,
+                "volume": 1.0,
+                "source": "mart",
+            },
+            {
+                "symbol": "BTC",
+                "date": date(2026, 7, 26),
+                "open": 2.0,
+                "high": 2.0,
+                "low": 2.0,
+                "close": 2.0,
+                "volume": 2.0,
+                "source": "mart",
+            },
+        ]
+    ).select(cols)
+    raw_rows = [
+        {
+            "symbol": "BTC",
+            "date": date(2026, 7, d),
+            "open": 1.5,
+            "high": 1.5,
+            "low": 1.5,
+            "close": 1.5,
+            "volume": 1.0,
+            "source": "raw",
+        }
+        for d in range(18, 27)
+    ]
+    raw = pl.DataFrame(raw_rows).select(cols)
+    out = _extend_daily_panel_with_raw(mart, raw)
+    btc = out.filter(pl.col("symbol") == "BTC").sort("date")
+    assert btc.height == 9
+    assert btc["date"].to_list() == [date(2026, 7, d) for d in range(18, 27)]
+
+
+def test_splice_daily_fills_july_2026_interior_hole() -> None:
+    from ccquant.dashboard import _long_term_indicator_seed, _splice_daily_tail
+
+    dates = [date(2026, 7, 18), date(2026, 7, 26)]
+    opens = [100.0, 110.0]
+    highs = [101.0, 111.0]
+    lows = [99.0, 109.0]
+    closes = [100.0, 110.0]
+    volumes = [1.0, 1.0]
+    fills = tuple(
+        (date(2026, 7, d), 105.0, 106.0, 104.0, 105.0, 1.0)
+        for d in range(19, 26)
+    )
+    _splice_daily_tail(
+        dates, opens, highs, lows, closes, volumes, fills, through=date(2026, 8, 24)
+    )
+    assert dates == [date(2026, 7, d) for d in range(18, 27)]
+    assert closes[0] == pytest.approx(100.0)
+    assert closes[-1] == pytest.approx(110.0)
+
+    rows: list[dict[str, object]] = []
+    for d, c in (
+        (date(2026, 7, 18), 100.0),
+        (date(2026, 7, 26), 110.0),
+    ):
+        for sym in ("BTC", "ETH"):
+            rows.append(
+                {
+                    "symbol": sym,
+                    "date": d,
+                    "open": c,
+                    "high": c,
+                    "low": c,
+                    "close": c,
+                    "volume": 1.0,
+                    "source": "test",
+                }
+            )
+    snap = build_snapshot_from_panels(pl.DataFrame(rows))
+    seed = _long_term_indicator_seed(snap, daily_tail=fills)
+    assert "2026-07-19" in seed["dates"]
+    assert "2026-07-25" in seed["dates"]
+    assert seed["daily_holes"] == []
+
+
 def test_sma_and_pi_cycle_helpers() -> None:
     from ccquant.dashboard import _cross_events, _sma
 
@@ -519,6 +612,7 @@ def test_render_dashboard_html_contains_hero() -> None:
     assert "todayShapes" in page
     assert "sliderRange" in page
     assert "through_date" in page
+    assert "daily_holes" in page
     assert "live_from" in page
     assert "sma50" in page
     assert "pi350x2" in page

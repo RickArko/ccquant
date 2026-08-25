@@ -24,6 +24,7 @@ import numpy as np
 import polars as pl
 
 from ccquant.forecasting import load_daily_panel, load_signals_panel
+from ccquant.integrity import interior_calendar_holes
 from ccquant.live_price import (
     DEFAULT_INTERVAL_FOR_RANGE,
     INTERVALS_FOR_RANGE,
@@ -216,20 +217,30 @@ def _splice_daily_tail(
     *,
     through: date,
 ) -> None:
-    """Append missing daily bars after the last stored date (oldest → newest)."""
+    """Insert fill bars for dates the stored series is missing (interior or tail)."""
     if not bars or not dates:
         return
-    last = dates[-1]
+    by_day: dict[date, tuple[float, float, float, float, float]] = {
+        d: (o, h, lo, c, v)
+        for d, o, h, lo, c, v in zip(
+            dates, opens, highs, lows, closes, volumes, strict=True
+        )
+    }
+    added = False
     for day, open_px, high, low, close, volume in bars:
-        if day <= last or day > through:
+        if day > through or day in by_day:
             continue
-        dates.append(day)
-        opens.append(open_px)
-        highs.append(high)
-        lows.append(low)
-        closes.append(close)
-        volumes.append(volume)
-        last = day
+        by_day[day] = (open_px, high, low, close, volume)
+        added = True
+    if not added:
+        return
+    ordered = sorted(by_day)
+    dates[:] = ordered
+    opens[:] = [by_day[d][0] for d in ordered]
+    highs[:] = [by_day[d][1] for d in ordered]
+    lows[:] = [by_day[d][2] for d in ordered]
+    closes[:] = [by_day[d][3] for d in ordered]
+    volumes[:] = [by_day[d][4] for d in ordered]
 
 
 def _fmt_tz(dt: datetime, tz: ZoneInfo = DASHBOARD_TZ) -> str:
@@ -383,7 +394,7 @@ def _load_raw_ohlcv_daily(database: Path) -> pl.DataFrame:
 def _extend_daily_panel_with_raw(
     daily: pl.DataFrame, raw: pl.DataFrame
 ) -> pl.DataFrame:
-    """Append raw OHLCV rows newer than the mart panel (per symbol)."""
+    """Append raw OHLCV rows the mart is missing (interior holes or newer tail)."""
     if daily.is_empty() or raw.is_empty():
         return daily
     need = ["symbol", "date", "open", "high", "low", "close", "volume", "source"]
@@ -391,11 +402,8 @@ def _extend_daily_panel_with_raw(
         return daily
     daily = daily.with_columns(pl.col("date").cast(pl.Date))
     raw = raw.with_columns(pl.col("date").cast(pl.Date))
-    mart_max = daily.group_by("symbol").agg(pl.col("date").max().alias("_max_d"))
     extra = (
-        raw.join(mart_max, on="symbol", how="inner")
-        .filter(pl.col("date") > pl.col("_max_d"))
-        .drop("_max_d")
+        raw.join(daily.select(["symbol", "date"]), on=["symbol", "date"], how="anti")
         .select(need)
         .unique(subset=["symbol", "date"], keep="last")
     )
@@ -1489,6 +1497,16 @@ def _long_term_indicator_seed(
         "pres_cycle": _presidential_overlay(
             until=through if end is None else max(through, end)
         ),
+        "daily_holes": [
+            d.isoformat()
+            for d in (
+                interior_calendar_holes(
+                    date_objs, start=date_objs[0], end=date_objs[-1]
+                )
+                if date_objs
+                else ()
+            )
+        ],
         "monthly": {
             "dates": m_iso,
             "open": list(m_o),
@@ -1530,6 +1548,13 @@ def render_dashboard_html(
     lt_seed = _long_term_indicator_seed(
         snapshot, live=live, daily_tail=daily_tail
     )
+    hole_dates = lt_seed.get("daily_holes") or []
+    if isinstance(hole_dates, list) and hole_dates:
+        gap_note = (
+            f" · {len(hole_dates)}d gap {hole_dates[0]}..{hole_dates[-1]}"
+        )
+    else:
+        gap_note = ""
     lt_seed_json = json.dumps(lt_seed, separators=(",", ":"))
     heatmap_seed = _btc_monthly_gains_seed(snapshot)
     heatmap_seed_json = json.dumps(heatmap_seed, separators=(",", ":"))
@@ -3672,7 +3697,8 @@ def render_dashboard_html(
     </section>
     {heatmap_html}
     <footer>
-      {html.escape(snapshot.freshness_note)} · Regime-conditional research only —
+      {html.escape(snapshot.freshness_note)}{html.escape(gap_note)}
+      · Regime-conditional research only —
       not a prediction.
       Deep dive: <a href="../../notebooks/Market_Tracker.ipynb">Market_Tracker.ipynb</a>
       · Refresh: <code>uv run ccquant sync all</code>
@@ -3699,6 +3725,12 @@ def write_dashboard(
     snap = build_market_snapshot(database)
     live: LiveTape | None = None
     daily_tail: tuple[DailyFill, ...] | None = None
+    try:
+        daily_tail = fetch_recent_daily_btc(days=90)
+    except Exception as exc:
+        import logging
+
+        logging.getLogger(__name__).warning("daily hole fill unavailable: %s", exc)
     if include_live:
         allowed = INTERVALS_FOR_RANGE[live_range]
         if live_interval not in allowed:
@@ -3710,12 +3742,6 @@ def write_dashboard(
             import logging
 
             logging.getLogger(__name__).warning("live tape unavailable: %s", exc)
-        try:
-            daily_tail = fetch_recent_daily_btc(days=45)
-        except Exception as exc:
-            import logging
-
-            logging.getLogger(__name__).warning("daily tail fill unavailable: %s", exc)
     path = Path(out)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
