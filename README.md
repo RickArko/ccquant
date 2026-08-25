@@ -9,10 +9,13 @@ statistical, ML, and foundation-model experiments.
 ## Quickstart
 
 ```bash
-# Full local install (all extras + dependency groups)
-uv sync --all-extras --all-groups
-uv run python -m ipykernel install --user --name=ccquant --display-name="Python (ccquant)"
-uv run pre-commit install
+# Full local install (Python extras + dbt Hub packages + kernel + hooks)
+make install
+# equivalent:
+# uv sync --all-extras --all-groups
+# uv run pre-commit install
+# uv run dbt deps --project-dir dbt --profiles-dir dbt
+# uv run python -m ipykernel install --user --name=ccquant --display-name="Python (ccquant)"
 
 # Sync Database
 # full universe + OHLCV + OI + depth + MEV + macro + wallets + dbt

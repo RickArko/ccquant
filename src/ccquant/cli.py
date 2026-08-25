@@ -48,15 +48,38 @@ def _load(config: str | None) -> tuple[MarketStore, AppConfig]:
     return MarketStore(cfg.database), cfg
 
 
+def _dbt_packages_installed() -> bool:
+    root = DBT_PROJECT_DIR / "dbt_packages"
+    if not root.is_dir():
+        return False
+    return any(
+        path.is_dir() and not path.name.startswith(".") for path in root.iterdir()
+    )
+
+
+def _ensure_dbt_packages() -> bool:
+    """Install Hub packages when ``dbt/dbt_packages`` is empty (gitignored)."""
+    if _dbt_packages_installed():
+        return True
+    console.print("[dim]dbt packages missing — running dbt deps...[/dim]")
+    return _run_dbt("deps")
+
+
 def _run_dbt(command: str, *args: str) -> bool:
     """Run a dbt subcommand. Returns True on success, False if dbt not found."""
     dbt_bin = shutil.which("dbt")
     if dbt_bin is None:
         console.print(
             "[yellow]dbt not installed — skipping dbt step.[/yellow]"
-            " Install with: uv sync --extra dbt"
+            " Install with: make install  (or uv sync --extra dbt && make dbt-deps)"
         )
         return False
+    if command != "deps" and not _dbt_packages_installed():
+        if not _ensure_dbt_packages():
+            console.print(
+                "[yellow]dbt deps failed — run: make dbt-deps[/yellow]"
+            )
+            return False
     cmd = [
         dbt_bin,
         command,

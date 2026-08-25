@@ -9,9 +9,11 @@ limits, and key setup instructions are in [`documentation/API_Pricing.md`](docum
 ## Commands
 
 ```bash
+make install                              # uv sync --all-extras --all-groups + pre-commit + dbt deps + kernel
 uv sync --extra dev                       # optional alias; plain `uv sync` already installs lint/test + notebooks via dependency-groups.dev
 uv sync --extra forecast                  # optional; forecast libs also in dependency-groups.dev
-uv sync --extra dbt                       # + dbt transforms
+uv sync --extra dbt                       # + dbt-core / dbt-duckdb (then: make dbt-deps)
+uv run dbt deps --project-dir dbt --profiles-dir dbt  # Hub packages into dbt/dbt_packages (gitignored)
 uv run pre-commit install                 # install git hook (run once after clone)
 uv run pre-commit run --all-files         # run all hooks manually
 uv run pytest                             # all tests
