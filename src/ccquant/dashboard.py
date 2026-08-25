@@ -27,10 +27,12 @@ from ccquant.forecasting import load_daily_panel, load_signals_panel
 from ccquant.live_price import (
     DEFAULT_INTERVAL_FOR_RANGE,
     INTERVALS_FOR_RANGE,
+    DailyFill,
     LiveInterval,
     LiveRange,
     LiveTape,
     fetch_live_tape,
+    fetch_recent_daily_btc,
 )
 
 MOM_LOOKBACK = 12
@@ -42,11 +44,13 @@ MTD_VOL_HIGH = 1.2
 MTD_VOL_LOW = 0.8
 # Length presets for the long-term chart (full history remains embedded).
 CHART_LENGTH_DAYS: dict[str, int | None] = {
+    "3m": 90,
     "1y": 365,
     "2y": 730,
     "5y": 1825,
     "all": None,
 }
+CHART_PERIOD_KEYS: tuple[str, ...] = ("mtd", "qtd", "ytd")
 CHART_DEFAULT_LENGTH = "2y"
 STALE_WARN_DAYS = 3
 DASHBOARD_TZ = ZoneInfo("America/Chicago")
@@ -115,6 +119,87 @@ def _to_tz(dt: datetime, tz: ZoneInfo) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=tz)
     return dt.astimezone(tz)
+
+
+def _session_today() -> date:
+    """Calendar date in the dashboard timezone (Chicago)."""
+    return datetime.now(DASHBOARD_TZ).date()
+
+
+def _chart_period_start(end: date, key: str) -> date:
+    """Calendar start for MTD / QTD / YTD windows ending at ``end``."""
+    if key == "mtd":
+        return date(end.year, end.month, 1)
+    if key == "qtd":
+        month = ((end.month - 1) // 3) * 3 + 1
+        return date(end.year, month, 1)
+    if key == "ytd":
+        return date(end.year, 1, 1)
+    raise ValueError(f"unknown chart period {key!r}")
+
+
+def _merge_live_bar(
+    dates: list[date],
+    opens: list[float],
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    volumes: list[float],
+    live: LiveTape | None,
+    *,
+    through: date,
+) -> None:
+    """Update or append today's in-progress bar from the live tape."""
+    if live is None or not dates:
+        return
+    day = _to_tz(live.as_of, DASHBOARD_TZ).date()
+    if day < dates[-1] or day > through:
+        return
+    # Don't draw a diagonal across a multi-day hole (stale daily panel).
+    if day > dates[-1] + timedelta(days=1):
+        return
+    last_px = live.last
+    if not (last_px > 0):
+        return
+    if day == dates[-1]:
+        highs[-1] = max(highs[-1], last_px)
+        lows[-1] = min(lows[-1], last_px)
+        closes[-1] = last_px
+        return
+    prev = closes[-1]
+    dates.append(day)
+    opens.append(prev)
+    highs.append(max(prev, last_px))
+    lows.append(min(prev, last_px))
+    closes.append(last_px)
+    volumes.append(0.0)
+
+
+def _splice_daily_tail(
+    dates: list[date],
+    opens: list[float],
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    volumes: list[float],
+    bars: tuple[DailyFill, ...] | None,
+    *,
+    through: date,
+) -> None:
+    """Append missing daily bars after the last stored date (oldest → newest)."""
+    if not bars or not dates:
+        return
+    last = dates[-1]
+    for day, open_px, high, low, close, volume in bars:
+        if day <= last or day > through:
+            continue
+        dates.append(day)
+        opens.append(open_px)
+        highs.append(high)
+        lows.append(low)
+        closes.append(close)
+        volumes.append(volume)
+        last = day
 
 
 def _fmt_tz(dt: datetime, tz: ZoneInfo = DASHBOARD_TZ) -> str:
@@ -246,6 +331,49 @@ def _load_equity(database: Path, symbol: str) -> pl.DataFrame:
             ).to_arrow_table()
         )
     return df if isinstance(df, pl.DataFrame) else df.to_frame()
+
+
+def _load_raw_ohlcv_daily(database: Path) -> pl.DataFrame:
+    """Raw ``ohlcv_daily`` (may be ahead of a lagging dbt mart)."""
+    with duckdb.connect(str(database), read_only=True) as conn:
+        if not _table_exists(conn, "main", "ohlcv_daily"):
+            return pl.DataFrame()
+        df = pl.from_arrow(
+            conn.execute(
+                """
+                select symbol, date, open, high, low, close, volume, source
+                from main.ohlcv_daily
+                order by symbol, date, source
+                """
+            ).to_arrow_table()
+        )
+    return df if isinstance(df, pl.DataFrame) else df.to_frame()
+
+
+def _extend_daily_panel_with_raw(
+    daily: pl.DataFrame, raw: pl.DataFrame
+) -> pl.DataFrame:
+    """Append raw OHLCV rows newer than the mart panel (per symbol)."""
+    if daily.is_empty() or raw.is_empty():
+        return daily
+    need = ["symbol", "date", "open", "high", "low", "close", "volume", "source"]
+    if any(c not in daily.columns or c not in raw.columns for c in need):
+        return daily
+    daily = daily.with_columns(pl.col("date").cast(pl.Date))
+    raw = raw.with_columns(pl.col("date").cast(pl.Date))
+    mart_max = daily.group_by("symbol").agg(pl.col("date").max().alias("_max_d"))
+    extra = (
+        raw.join(mart_max, on="symbol", how="inner")
+        .filter(pl.col("date") > pl.col("_max_d"))
+        .drop("_max_d")
+        .select(need)
+        .unique(subset=["symbol", "date"], keep="last")
+    )
+    if extra.is_empty():
+        return daily
+    return pl.concat([daily.select(need), extra], how="vertical").sort(
+        ["symbol", "date"]
+    )
 
 
 def _etf_mstr_demand(
@@ -765,6 +893,8 @@ def build_market_snapshot(database: str | Path) -> MarketSnapshot:
         raise RuntimeError("mart_signals_daily is empty — sync + dbt build first")
 
     daily = load_daily_panel(path)
+    raw = _load_raw_ohlcv_daily(path)
+    daily = _extend_daily_panel_with_raw(daily, raw)
     macro = _load_macro(path)
     onchain = _load_onchain(path)
     etf_flows = _load_etf_total_flows(path)
@@ -874,6 +1004,9 @@ def _btc_monthly_gains_seed(snapshot: MarketSnapshot) -> dict[str, object]:
         d = m_dates[i]
         ret_by_ym[(d.year, d.month)] = (m_closes[i] / prev - 1.0) * 100.0
 
+    as_of = snapshot.as_of
+    last_dom = calendar.monthrange(as_of.year, as_of.month)[1]
+    month_open = as_of.day < last_dom
     years = sorted({d.year for d in m_dates}, reverse=True)
     z: list[list[float | None]] = []
     text: list[list[str]] = []
@@ -883,7 +1016,12 @@ def _btc_monthly_gains_seed(snapshot: MarketSnapshot) -> dict[str, object]:
         for month in range(1, 13):
             val = ret_by_ym.get((year, month))
             row.append(val)
-            trow.append("" if val is None else f"{val:+.1f}")
+            if val is None:
+                trow.append("")
+            elif month_open and year == as_of.year and month == as_of.month:
+                trow.append(f"{val:+.1f} MTD")
+            else:
+                trow.append(f"{val:+.1f}")
         z.append(row)
         text.append(trow)
 
@@ -894,7 +1032,6 @@ def _btc_monthly_gains_seed(snapshot: MarketSnapshot) -> dict[str, object]:
     else:
         lim = HEATMAP_RET_CAP_PCT
 
-    as_of = snapshot.as_of
     return {
         "months": list(MONTH_LABELS),
         "years": [str(y) for y in years],
@@ -1184,14 +1321,50 @@ def _larsson_series(
     }
 
 
-def _long_term_indicator_seed(snapshot: MarketSnapshot) -> dict[str, object]:
+def _long_term_indicator_seed(
+    snapshot: MarketSnapshot,
+    *,
+    live: LiveTape | None = None,
+    daily_tail: tuple[DailyFill, ...] | None = None,
+) -> dict[str, object]:
     """Build JSON-serializable series for the long-term chart controls."""
-    dates = [d.isoformat() for d in snapshot.btc_dates]
+    date_objs = list(snapshot.btc_dates)
     opens = list(snapshot.btc_opens)
     highs = list(snapshot.btc_highs)
     lows = list(snapshot.btc_lows)
     closes = list(snapshot.btc_closes)
     volumes = list(snapshot.btc_volumes)
+
+    complete_through = date_objs[-1] if date_objs else None
+    through = _session_today()
+    if complete_through is not None and complete_through > through:
+        through = complete_through
+    if live is not None:
+        live_day = _to_tz(live.as_of, DASHBOARD_TZ).date()
+        if live_day > through:
+            through = live_day
+    _splice_daily_tail(
+        date_objs,
+        opens,
+        highs,
+        lows,
+        closes,
+        volumes,
+        daily_tail,
+        through=through,
+    )
+    _merge_live_bar(
+        date_objs, opens, highs, lows, closes, volumes, live, through=through
+    )
+
+    dates = [d.isoformat() for d in date_objs]
+    # Shade only the in-progress session — never the stale hole before it.
+    live_from = through if date_objs else None
+    live_appended = bool(
+        live is not None
+        and date_objs
+        and date_objs[-1] == _to_tz(live.as_of, DASHBOARD_TZ).date()
+    )
 
     sma50 = _sma(closes, 50)
     sma200 = _sma(closes, 200)
@@ -1204,12 +1377,12 @@ def _long_term_indicator_seed(snapshot: MarketSnapshot) -> dict[str, object]:
     larsson = _larsson_series(dates, highs, lows, closes, bar="daily")
 
     m_dates, m_o, m_h, m_l, m_c, m_v = _monthly_ohlcv(
-        snapshot.btc_dates,
-        snapshot.btc_opens,
-        snapshot.btc_highs,
-        snapshot.btc_lows,
-        snapshot.btc_closes,
-        snapshot.btc_volumes,
+        tuple(date_objs),
+        tuple(opens),
+        tuple(highs),
+        tuple(lows),
+        tuple(closes),
+        tuple(volumes),
     )
     m_iso = [d.isoformat() for d in m_dates]
     m_closes = list(m_c)
@@ -1222,7 +1395,7 @@ def _long_term_indicator_seed(snapshot: MarketSnapshot) -> dict[str, object]:
         m_iso, list(m_h), list(m_l), m_closes, bar="monthly"
     )
 
-    end = snapshot.btc_dates[-1] if snapshot.btc_dates else None
+    end = date_objs[-1] if date_objs else None
     length_starts: dict[str, str | None] = {}
     for key, days in CHART_LENGTH_DAYS.items():
         if not dates:
@@ -1233,11 +1406,23 @@ def _long_term_indicator_seed(snapshot: MarketSnapshot) -> dict[str, object]:
             continue
         target = end - timedelta(days=days)
         length_starts[key] = next(
-            (d.isoformat() for d in snapshot.btc_dates if d >= target),
+            (d.isoformat() for d in date_objs if d >= target),
             dates[0],
         )
+    anchor = through
+    for key in CHART_PERIOD_KEYS:
+        if not dates:
+            length_starts[key] = None
+            continue
+        length_starts[key] = _chart_period_start(anchor, key).isoformat()
 
     return {
+        "through_date": through.isoformat(),
+        "live_from": live_from.isoformat() if live_from is not None else None,
+        "complete_through": (
+            complete_through.isoformat() if complete_through is not None else None
+        ),
+        "live_label": "Live" if live_appended else "Today",
         "dates": dates,
         "open": opens,
         "high": highs,
@@ -1264,7 +1449,9 @@ def _long_term_indicator_seed(snapshot: MarketSnapshot) -> dict[str, object]:
         "larsson_state": larsson["larsson_state"],
         "larsson_bands": larsson["larsson_bands"],
         "halvings": _halving_overlay(),
-        "pres_cycle": _presidential_overlay(until=end or date.today()),
+        "pres_cycle": _presidential_overlay(
+            until=through if end is None else max(through, end)
+        ),
         "monthly": {
             "dates": m_iso,
             "open": list(m_o),
@@ -1293,6 +1480,7 @@ def render_dashboard_html(
     snapshot: MarketSnapshot,
     *,
     live: LiveTape | None = None,
+    daily_tail: tuple[DailyFill, ...] | None = None,
 ) -> str:
     """Return a self-contained single-page HTML dashboard."""
     try:
@@ -1302,7 +1490,9 @@ def render_dashboard_html(
             "plotly is required for the dashboard. Install with: uv sync"
         ) from exc
 
-    lt_seed = _long_term_indicator_seed(snapshot)
+    lt_seed = _long_term_indicator_seed(
+        snapshot, live=live, daily_tail=daily_tail
+    )
     lt_seed_json = json.dumps(lt_seed, separators=(",", ":"))
     heatmap_seed = _btc_monthly_gains_seed(snapshot)
     heatmap_seed_json = json.dumps(heatmap_seed, separators=(",", ":"))
@@ -1329,14 +1519,26 @@ def render_dashboard_html(
           <button type="button" class="live-btn"
                   data-lt-style="candle">Candle</button>
         </div>
+        <div class="lt-range-groups">
+        <div class="live-btn-group" id="lt-periods"
+             aria-label="Calendar period">
+          <button type="button" class="live-btn" data-lt-length="mtd"
+                  title="Month to date">MTD</button>
+          <button type="button" class="live-btn" data-lt-length="qtd"
+                  title="Quarter to date">QTD</button>
+          <button type="button" class="live-btn" data-lt-length="ytd"
+                  title="Year to date">YTD</button>
+        </div>
         <div class="live-btn-group" id="lt-lengths"
-             aria-label="Long-term length">
+             aria-label="Lookback length">
+          <button type="button" class="live-btn" data-lt-length="3m">3M</button>
           <button type="button" class="live-btn" data-lt-length="1y">1Y</button>
           <button type="button" class="live-btn active"
                   data-lt-length="2y">2Y</button>
           <button type="button" class="live-btn" data-lt-length="5y">5Y</button>
           <button type="button" class="live-btn"
                   data-lt-length="all">All</button>
+        </div>
         </div>
         <div class="lt-ind-group" id="lt-indicators"
              aria-label="Long-term indicators">
@@ -1377,7 +1579,8 @@ def render_dashboard_html(
       <p class="heatmap-note">
         Calendar-month close-to-close returns (%). Green = up, red = down;
         intensity scales with magnitude (color clipped at
-        ±{HEATMAP_RET_CAP_PCT:.0f}%). Current month (MTD) is highlighted.
+        ±{HEATMAP_RET_CAP_PCT:.0f}%). The open month is labeled MTD and
+        highlighted.
       </p>
       <div id="btc-month-heatmap" class="month-heatmap-plot"
            style="min-height:{heat_plot_h}px"></div>
@@ -1546,6 +1749,7 @@ def render_dashboard_html(
   const bars = document.getElementById("lt-bars");
   const styles = document.getElementById("lt-styles");
   const lengths = document.getElementById("lt-lengths");
+  const periods = document.getElementById("lt-periods");
   const plotEl = document.getElementById("lt-plot");
   const seedEl = document.getElementById("lt-seed");
   const statusEl = document.getElementById("lt-ind-status");
@@ -1577,6 +1781,30 @@ def render_dashboard_html(
     return m ? m[1] : String(v);
   }
 
+  function padEnd(iso) {
+    const t = Date.parse(dateKey(iso) + "T00:00:00Z");
+    if (!Number.isFinite(t)) return iso;
+    return new Date(t + 86400000).toISOString().slice(0, 10);
+  }
+
+  function clipAsOf(v) {
+    const k = dateKey(v);
+    const cap = seed.through_date;
+    if (cap && k > cap) return cap;
+    return k;
+  }
+
+  function seriesEnd() {
+    return seed.through_date || ((seed.dates || [])[(seed.dates || []).length - 1]);
+  }
+
+  function sliderRange() {
+    const dates = seed.dates || [];
+    if (!dates.length) return null;
+    const through = seriesEnd();
+    return through ? [dates[0], padEnd(through)] : [dates[0], dates[dates.length - 1]];
+  }
+
   function activeSeries() {
     return barMode === "monthly" ? (seed.monthly || seed) : seed;
   }
@@ -1585,12 +1813,14 @@ def render_dashboard_html(
     const s = activeSeries();
     const dates = s.dates || [];
     if (!dates.length) return null;
-    const end = dates[dates.length - 1];
-    if (key === "all") return [dates[0], end];
+    const end = padEnd(dates[dates.length - 1]);
+    if (key === "all") {
+      return [dates[0], padEnd(seriesEnd() || dates[dates.length - 1])];
+    }
     const startHint = (seed.length_starts || {})[key];
     if (!startHint) return [dates[0], end];
-    const start = dates.find(function (d) { return d >= startHint; }) || dates[0];
-    return [start, end];
+    const snapped = dates.find(function (d) { return d >= startHint; });
+    return [snapped || startHint, end];
   }
 
   function ensureXRange() {
@@ -1837,12 +2067,65 @@ def render_dashboard_html(
     if (showLarsson) {
       shapes.push.apply(shapes, larssonShapes(series.larsson_bands));
     }
+    shapes.push.apply(shapes, todayShapes());
     return shapes;
   }
 
+  function todayShapes() {
+    const from = seed.live_from;
+    const through = seed.through_date;
+    if (!from || !through) return [];
+    return [
+      {
+        type: "rect",
+        xref: "x",
+        yref: "paper",
+        x0: from,
+        x1: padEnd(through),
+        y0: 0,
+        y1: 1,
+        fillcolor: "rgba(247, 147, 26, 0.20)",
+        line: { width: 0 },
+        layer: "below"
+      },
+      {
+        type: "line",
+        xref: "x",
+        yref: "paper",
+        x0: through,
+        x1: through,
+        y0: 0,
+        y1: 1,
+        line: { color: "rgba(247, 147, 26, 0.85)", width: 1.4 },
+        layer: "above"
+      }
+    ];
+  }
+
+  function todayAnnotations() {
+    const through = seed.through_date;
+    if (!through) return [];
+    return [{
+      x: through,
+      y: 1,
+      yref: "paper",
+      text: seed.live_label || "Today",
+      showarrow: false,
+      xanchor: "right",
+      yanchor: "bottom",
+      xshift: -2,
+      yshift: 2,
+      font: { size: isNarrow() ? 9 : 10, color: "#f7931a" },
+      bgcolor: "rgba(18,20,26,0.6)",
+      borderpad: 2,
+      captureevents: false
+    }];
+  }
+
   function overlayAnnotations(xr) {
-    if (isNarrow()) return [];
     const anns = [];
+    anns.push.apply(anns, todayAnnotations());
+    if (isNarrow()) return anns;
     const showHalving = !!(halvingCb && halvingCb.checked);
     const showPres = !!(presCb && presCb.checked);
     const showLarsson = !!(larssonCb && larssonCb.checked);
@@ -1955,13 +2238,14 @@ def render_dashboard_html(
     const showHalving = !!(halvingCb && halvingCb.checked);
     const showPres = !!(presCb && presCb.checked);
     while (legendEl.firstChild) legendEl.removeChild(legendEl.firstChild);
-    if (!showHalving && !showPres) {
+    const showToday = !!(seed.live_from && seed.through_date);
+    if (!showHalving && !showPres && !showToday) {
       legendEl.hidden = true;
       return;
     }
     legendEl.hidden = false;
     const dates = series.dates || [];
-    const asOf = (xr && xr[1]) || dates[dates.length - 1];
+    const asOf = clipAsOf((xr && xr[1]) || dates[dates.length - 1]);
     if (showHalving) {
       const epochs = ((seed.halvings || {}).epochs) || [];
       const cur = covering(epochs, asOf);
@@ -2005,6 +2289,12 @@ def render_dashboard_html(
         now.className += " lt-legend-now";
         legendEl.appendChild(now);
       }
+    }
+    if (seed.live_from && seed.through_date) {
+      legendEl.appendChild(legendItem(
+        "rgba(247,147,26,0.9)",
+        (seed.live_label || "Today") + " · " + seed.through_date
+      ));
     }
   }
 
@@ -2061,9 +2351,12 @@ def render_dashboard_html(
     if (halvingCb && halvingCb.checked) bits.push("Halvings");
     if (presCb && presCb.checked) {
       const dates = series.dates || [];
-      const asOf = (xRange && xRange[1]) || dates[dates.length - 1];
+      const asOf = clipAsOf((xRange && xRange[1]) || dates[dates.length - 1]);
       const y = covering(((seed.pres_cycle || {}).years) || [], asOf);
       bits.push(y ? ("Pres " + y.short) : "Pres. cycle");
+    }
+    if (seed.through_date) {
+      bits.push((seed.live_label || "to") + " " + seed.through_date);
     }
     bits.push(barMode === "monthly" ? "monthly" : "daily");
     bits.push(styleMode);
@@ -2113,6 +2406,31 @@ def render_dashboard_html(
         x: series.dates,
         y: series.close,
         line: { color: "#F7931A", width: 2 }
+      });
+    }
+    const lastD = (series.dates || [])[(series.dates || []).length - 1];
+    const lastC = (series.close || [])[(series.close || []).length - 1];
+    if (
+      barMode === "daily"
+      && seed.live_from
+      && lastD
+      && lastD >= seed.live_from
+      && typeof lastC === "number"
+    ) {
+      traces.push({
+        type: "scatter",
+        mode: "markers",
+        name: seed.live_label || "Today",
+        x: [lastD],
+        y: [lastC],
+        marker: {
+          color: "#f7931a",
+          size: 9,
+          symbol: "circle",
+          line: { color: "#e8e6e1", width: 1 }
+        },
+        hovertemplate: (seed.live_label || "Today")
+          + " %{x}<br>%{y:,.0f}<extra></extra>"
       });
     }
     if (showSma) {
@@ -2209,7 +2527,13 @@ def render_dashboard_html(
         title: "Date",
         type: "date",
         range: xr || undefined,
-        rangeslider: { visible: true, thickness: 0.08 }
+        rangeslider: {
+          visible: true,
+          thickness: 0.12,
+          range: sliderRange() || undefined,
+          bgcolor: "#0e1014",
+          bordercolor: "#2a2e38"
+        }
       },
       yaxis: {
         title: "USD",
@@ -2305,15 +2629,23 @@ def render_dashboard_html(
   });
 
   lengths.querySelectorAll(".live-btn").forEach(function (btn) {
-    btn.addEventListener("click", function () {
-      const next = btn.getAttribute("data-lt-length");
-      if (!next) return;
-      lengthKey = next;
-      setActiveGroup(lengths, "data-lt-length", lengthKey);
-      xRange = windowForLength(lengthKey);
-      renderChart();
-    });
+    btn.addEventListener("click", onLengthClick);
   });
+  if (periods) {
+    periods.querySelectorAll(".live-btn").forEach(function (btn) {
+      btn.addEventListener("click", onLengthClick);
+    });
+  }
+
+  function onLengthClick() {
+    const next = this.getAttribute("data-lt-length");
+    if (!next) return;
+    lengthKey = next;
+    setActiveGroup(lengths, "data-lt-length", lengthKey);
+    setActiveGroup(periods, "data-lt-length", lengthKey);
+    xRange = windowForLength(lengthKey);
+    renderChart();
+  }
 
   [smaCb, piCb, larssonCb, halvingCb, presCb].forEach(function (el) {
     if (el) el.addEventListener("change", renderChart);
@@ -2338,6 +2670,7 @@ def render_dashboard_html(
   }
 
   setActiveGroup(lengths, "data-lt-length", lengthKey);
+  setActiveGroup(periods, "data-lt-length", lengthKey);
   xRange = windowForLength(lengthKey);
   renderChart();
 })();
@@ -3104,6 +3437,12 @@ def render_dashboard_html(
       gap: 0.45rem 0.75rem;
       margin: 0 0 0.35rem;
     }}
+    .lt-range-groups {{
+      display: inline-flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.45rem;
+    }}
     .lt-ind-group {{
       display: inline-flex;
       flex-wrap: wrap;
@@ -3303,6 +3642,7 @@ def write_dashboard(
     """Build snapshot (+ optional live tape), write HTML, return output path."""
     snap = build_market_snapshot(database)
     live: LiveTape | None = None
+    daily_tail: tuple[DailyFill, ...] | None = None
     if include_live:
         allowed = INTERVALS_FOR_RANGE[live_range]
         if live_interval not in allowed:
@@ -3314,7 +3654,16 @@ def write_dashboard(
             import logging
 
             logging.getLogger(__name__).warning("live tape unavailable: %s", exc)
+        try:
+            daily_tail = fetch_recent_daily_btc(days=45)
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).warning("daily tail fill unavailable: %s", exc)
     path = Path(out)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_dashboard_html(snap, live=live), encoding="utf-8")
+    path.write_text(
+        render_dashboard_html(snap, live=live, daily_tail=daily_tail),
+        encoding="utf-8",
+    )
     return path.resolve()

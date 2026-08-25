@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 
 import httpx
@@ -26,6 +26,8 @@ COINBASE_CANDLES = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
 
 LiveInterval = Literal["1m", "5m", "15m", "1h", "4h", "1d"]
 LiveRange = Literal["1h", "1d", "7d"]
+# date, open, high, low, close, volume
+DailyFill = tuple[date, float, float, float, float, float]
 
 _INTERVAL_SEC = {
     "1m": 60,
@@ -306,3 +308,124 @@ def _fetch_coinbase(
         bar_lows=lows,
         bar_closes=closes,
     )
+
+
+def fetch_recent_daily_btc(
+    *,
+    days: int = 45,
+    client: httpx.Client | None = None,
+) -> tuple[DailyFill, ...]:
+    """Recent BTC daily OHLC (Binance → Coinbase) to fill a stale dashboard tail."""
+    want = max(1, days)
+    own = client is None
+    http = client or httpx.Client(timeout=20.0, follow_redirects=True)
+    try:
+        try:
+            return _fetch_binance_daily(http, want)
+        except Exception as exc:
+            LOGGER.warning("Binance daily fill failed (%s); trying Coinbase", exc)
+            return _fetch_coinbase_daily(http, want)
+    finally:
+        if own:
+            http.close()
+
+
+def _fetch_binance_daily(client: httpx.Client, days: int) -> tuple[DailyFill, ...]:
+    last_err: Exception | None = None
+    for host in BINANCE_HOSTS:
+        try:
+            collected: list[list[object]] = []
+            end_time: int | None = None
+            while len(collected) < days:
+                page = min(BINANCE_PAGE, days - len(collected))
+                batch = _fetch_binance_page(
+                    client,
+                    host,
+                    interval="1d",
+                    limit=page,
+                    end_time_ms=end_time,
+                )
+                if not batch:
+                    break
+                collected = batch + collected
+                end_time = int(str(batch[0][0])) - 1
+                if len(batch) < page:
+                    break
+            if not collected:
+                raise RuntimeError(f"empty daily klines from {host}")
+            by_t: dict[int, list[object]] = {}
+            for row in collected:
+                by_t[int(str(row[0]))] = row
+            ordered = [by_t[k] for k in sorted(by_t)][-days:]
+            out: list[DailyFill] = []
+            for row in ordered:
+                day = datetime.fromtimestamp(
+                    int(str(row[0])) / 1000, tz=UTC
+                ).date()
+                vol = float(str(row[5])) if len(row) > 5 else 0.0
+                out.append(
+                    (
+                        day,
+                        float(str(row[1])),
+                        float(str(row[2])),
+                        float(str(row[3])),
+                        float(str(row[4])),
+                        vol,
+                    )
+                )
+            return tuple(out)
+        except Exception as exc:
+            last_err = exc
+            LOGGER.debug("binance daily %s failed: %s", host, exc)
+            continue
+    raise RuntimeError(f"all Binance hosts failed for daily fill: {last_err}")
+
+
+def _fetch_coinbase_daily(client: httpx.Client, days: int) -> tuple[DailyFill, ...]:
+    gran = 86_400
+    collected: list[list[object]] = []
+    end = datetime.now(tz=UTC)
+    while len(collected) < days:
+        page = min(COINBASE_PAGE, days - len(collected))
+        start = end - timedelta(seconds=page * gran)
+        candles = client.get(
+            COINBASE_CANDLES,
+            params={
+                "granularity": gran,
+                "start": start.isoformat().replace("+00:00", "Z"),
+                "end": end.isoformat().replace("+00:00", "Z"),
+            },
+            headers={"User-Agent": "ccquant/0.1"},
+        )
+        candles.raise_for_status()
+        batch = candles.json()
+        if not isinstance(batch, list) or not batch:
+            break
+        batch_sorted = sorted(batch, key=lambda r: int(r[0]))
+        collected = batch_sorted + collected
+        end = datetime.fromtimestamp(int(batch_sorted[0][0]), tz=UTC) - timedelta(
+            seconds=gran
+        )
+        if len(batch) < page:
+            break
+    by_t: dict[int, list[object]] = {}
+    for row in collected:
+        by_t[int(str(row[0]))] = row
+    rows = [by_t[k] for k in sorted(by_t)][-days:]
+    out: list[DailyFill] = []
+    for row in rows:
+        day = datetime.fromtimestamp(int(str(row[0])), tz=UTC).date()
+        vol = float(str(row[5])) if len(row) > 5 else 0.0
+        out.append(
+            (
+                day,
+                float(str(row[3])),
+                float(str(row[2])),
+                float(str(row[1])),
+                float(str(row[4])),
+                vol,
+            )
+        )
+    if not out:
+        raise RuntimeError("empty Coinbase daily candles")
+    return tuple(out)

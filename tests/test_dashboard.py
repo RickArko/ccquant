@@ -176,6 +176,89 @@ def test_btc_monthly_gains_seed_matrix() -> None:
     assert zmax > 0
     assert seed["current_month"] == "Feb"
     assert seed["current_year"] == "2025"
+    texts = seed["text"]
+    assert isinstance(texts, list)
+    feb_txt = texts[years.index("2025")][1]
+    assert feb_txt == "+10.0"
+
+
+def test_heatmap_marks_open_month_as_mtd() -> None:
+    from ccquant.dashboard import _btc_monthly_gains_seed
+
+    end = date(2026, 8, 10)
+    rows: list[dict[str, object]] = []
+    for i in range(45):
+        d = end - timedelta(days=44 - i)
+        close = 100.0 if d.month == 7 else 101.8
+        rows.append(
+            {
+                "symbol": "BTC",
+                "date": d,
+                "open": close,
+                "high": close,
+                "low": close,
+                "close": close,
+                "volume": 1.0,
+                "source": "test",
+            }
+        )
+    snap = build_snapshot_from_panels(pl.DataFrame(rows))
+    seed = _btc_monthly_gains_seed(snap)
+    years = seed["years"]
+    assert isinstance(years, list)
+    texts = seed["text"]
+    assert isinstance(texts, list)
+    aug = texts[years.index("2026")][7]
+    assert "MTD" in str(aug)
+
+
+def test_extend_daily_panel_with_raw_appends_newer_btc() -> None:
+    from ccquant.dashboard import _extend_daily_panel_with_raw
+
+    cols = ["symbol", "date", "open", "high", "low", "close", "volume", "source"]
+    mart = pl.DataFrame(
+        [
+            {
+                "symbol": "BTC",
+                "date": date(2026, 8, 10),
+                "open": 1.0,
+                "high": 1.0,
+                "low": 1.0,
+                "close": 1.0,
+                "volume": 1.0,
+                "source": "mart",
+            }
+        ]
+    ).select(cols)
+    raw = pl.DataFrame(
+        [
+            {
+                "symbol": "BTC",
+                "date": date(2026, 8, 10),
+                "open": 1.0,
+                "high": 1.0,
+                "low": 1.0,
+                "close": 1.0,
+                "volume": 1.0,
+                "source": "raw",
+            },
+            {
+                "symbol": "BTC",
+                "date": date(2026, 8, 24),
+                "open": 2.0,
+                "high": 2.0,
+                "low": 2.0,
+                "close": 2.0,
+                "volume": 2.0,
+                "source": "raw",
+            },
+        ]
+    ).select(cols)
+    out = _extend_daily_panel_with_raw(mart, raw)
+    btc = out.filter(pl.col("symbol") == "BTC").sort("date")
+    assert btc.height == 2
+    assert btc["date"][-1] == date(2026, 8, 24)
+    assert btc["close"][-1] == pytest.approx(2.0)
 
 
 def test_sma_and_pi_cycle_helpers() -> None:
@@ -272,6 +355,83 @@ def test_presidential_overlay_terms_and_elections() -> None:
     assert "2028-11-07" in election_dates
 
 
+def test_merge_live_bar_appends_today() -> None:
+    from ccquant.dashboard import _merge_live_bar
+
+    dates = [date(2026, 8, 23)]
+    opens = [100.0]
+    highs = [110.0]
+    lows = [90.0]
+    closes = [105.0]
+    volumes = [1.0]
+    live = LiveTape(
+        last=108.0,
+        change_24h_pct=0.01,
+        high_24h=109.0,
+        low_24h=104.0,
+        as_of=datetime(2026, 8, 24, 18, 0, tzinfo=UTC),
+        source="binance",
+        interval="5m",
+        range_key="1h",
+        bar_times=(),
+        bar_opens=(),
+        bar_highs=(),
+        bar_lows=(),
+        bar_closes=(),
+    )
+    _merge_live_bar(
+        dates, opens, highs, lows, closes, volumes, live, through=date(2026, 8, 24)
+    )
+    assert dates[-1] == date(2026, 8, 24)
+    assert closes[-1] == pytest.approx(108.0)
+    assert opens[-1] == pytest.approx(105.0)
+
+
+def test_merge_live_bar_updates_same_day() -> None:
+    from ccquant.dashboard import _merge_live_bar
+
+    dates = [date(2026, 8, 24)]
+    opens = [100.0]
+    highs = [110.0]
+    lows = [90.0]
+    closes = [105.0]
+    volumes = [1.0]
+    live = LiveTape(
+        last=112.0,
+        change_24h_pct=0.02,
+        high_24h=113.0,
+        low_24h=104.0,
+        as_of=datetime(2026, 8, 24, 22, 0, tzinfo=UTC),
+        source="binance",
+        interval="5m",
+        range_key="1h",
+        bar_times=(),
+        bar_opens=(),
+        bar_highs=(),
+        bar_lows=(),
+        bar_closes=(),
+    )
+    _merge_live_bar(
+        dates, opens, highs, lows, closes, volumes, live, through=date(2026, 8, 24)
+    )
+    assert len(dates) == 1
+    assert closes[-1] == pytest.approx(112.0)
+    assert highs[-1] == pytest.approx(112.0)
+    from ccquant.dashboard import _presidential_overlay
+
+    pc = _presidential_overlay(until=date(2026, 8, 19))
+    years = {b["year"]: b for b in pc["years"] if isinstance(b, dict)}
+    assert years[2024]["cycle"] == 4
+    assert years[2024]["short"] == "Y4"
+    assert years[2026]["label"] == "Y2 midterm"
+    admins = {a["label"]: a for a in pc["admins"] if isinstance(a, dict)}
+    assert admins["Trump II"]["start"] == "2025-01-20"
+    assert admins["Biden"]["end"] == "2025-01-20"
+    election_dates = {e["date"] for e in pc["elections"] if isinstance(e, dict)}
+    assert "2024-11-05" in election_dates
+    assert "2028-11-07" in election_dates
+
+
 def test_render_dashboard_html_contains_hero() -> None:
     pytest.importorskip("plotly")
     # Need warm-up length for SMA350 / Pi Cycle seed series.
@@ -284,8 +444,13 @@ def test_render_dashboard_html_contains_hero() -> None:
     assert "plotly" in page.lower()
     assert 'data-lt-bar="monthly"' in page
     assert 'data-lt-style="candle"' in page
+    assert 'data-lt-length="mtd"' in page
+    assert 'data-lt-length="qtd"' in page
+    assert 'data-lt-length="ytd"' in page
+    assert 'data-lt-length="3m"' in page
     assert 'data-lt-length="2y"' in page
     assert 'data-lt-length="all"' in page
+    assert 'id="lt-periods"' in page
     assert 'id="lt-ind-sma"' in page
     assert 'id="lt-ind-pi"' in page
     assert 'id="lt-ind-larsson"' in page
@@ -299,6 +464,10 @@ def test_render_dashboard_html_contains_hero() -> None:
     assert "updateCycleLegend" in page
     assert "visibleMid" in page
     assert "captureevents" in page
+    assert "todayShapes" in page
+    assert "sliderRange" in page
+    assert "through_date" in page
+    assert "live_from" in page
     assert "sma50" in page
     assert "pi350x2" in page
     assert "larsson_bull" in page
@@ -333,9 +502,24 @@ def test_render_dashboard_html_contains_hero() -> None:
     assert seed["length_starts"]["2y"] is not None
     assert seed["dates"][0] < seed["length_starts"]["2y"]
     assert seed["length_starts"]["2y"] < seed["dates"][-1]
+    assert "mtd" in seed["length_starts"]
+    assert "qtd" in seed["length_starts"]
+    assert "ytd" in seed["length_starts"]
+    assert "3m" in seed["length_starts"]
+    from ccquant.dashboard import _chart_period_start, _session_today
+
+    today = _session_today()
+    assert seed["length_starts"]["mtd"] == _chart_period_start(today, "mtd").isoformat()
+    assert seed["length_starts"]["qtd"] == _chart_period_start(today, "qtd").isoformat()
+    assert seed["length_starts"]["ytd"] == _chart_period_start(today, "ytd").isoformat()
     assert "open" in seed and "high" in seed
     assert "monthly" in seed and "larsson_bands" in seed["monthly"]
     assert "halvings" in seed and "pres_cycle" in seed
+    assert "through_date" in seed and "live_from" in seed
+    assert isinstance(seed["through_date"], str)
+    assert seed["through_date"] >= seed["dates"][-1]
+    if seed["live_from"] is not None:
+        assert seed["live_from"] <= seed["through_date"]
     hv = seed["halvings"]
     assert isinstance(hv, dict)
     events = hv["events"]
@@ -405,3 +589,11 @@ def test_render_dashboard_html_includes_live_tape() -> None:
     assert '"1d":["1h","4h"]' in page or '"1d": ["1h", "4h"]' in page
     assert '"7d":["1h","4h","1d"]' in page or '"7d": ["1h", "4h", "1d"]' in page
     assert "syncIntervalButtons" in page
+    lt_seed = json.loads(
+        page.split('id="lt-seed">', 1)[1].split("</script>", 1)[0]
+    )
+    assert lt_seed["dates"][-1] >= "2026-07-19"
+    assert lt_seed["close"][-1] == pytest.approx(65_432.1)
+    assert lt_seed["through_date"] >= "2026-07-19"
+    assert lt_seed["live_from"] is not None
+    assert lt_seed["live_label"] == "Live"
