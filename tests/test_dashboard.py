@@ -180,12 +180,13 @@ def test_btc_monthly_gains_seed_matrix() -> None:
     assert isinstance(texts, list)
     feb_txt = texts[years.index("2025")][1]
     assert feb_txt == "+10.0"
+    assert seed["open_through"] is None
 
 
-def test_heatmap_marks_open_month_as_mtd() -> None:
+def test_heatmap_open_month_year_label_includes_through_date() -> None:
     from ccquant.dashboard import _btc_monthly_gains_seed
 
-    end = date(2026, 8, 10)
+    end = date(2026, 8, 24)
     rows: list[dict[str, object]] = []
     for i in range(45):
         d = end - timedelta(days=44 - i)
@@ -209,7 +210,9 @@ def test_heatmap_marks_open_month_as_mtd() -> None:
     texts = seed["text"]
     assert isinstance(texts, list)
     aug = texts[years.index("2026")][7]
-    assert "MTD" in str(aug)
+    assert str(aug) == "+1.8"
+    assert seed["open_through"] == "Aug, 24"
+    assert "MTD" not in str(aug)
 
 
 def test_extend_daily_panel_with_raw_appends_newer_btc() -> None:
@@ -487,6 +490,8 @@ def test_render_dashboard_html_contains_hero() -> None:
     assert 'text: "Month"' in page
     assert 'text: "Year"' in page
     assert "current_month" in page
+    assert "open_through" in page
+    assert "year label shows the last daily close" in page
     assert "rgba(247, 147, 26" in page
     assert "Rel vol 20d" in page
     assert "MTD vol pace" in page

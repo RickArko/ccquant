@@ -1007,6 +1007,10 @@ def _btc_monthly_gains_seed(snapshot: MarketSnapshot) -> dict[str, object]:
     as_of = snapshot.as_of
     last_dom = calendar.monthrange(as_of.year, as_of.month)[1]
     month_open = as_of.day < last_dom
+    # Year-axis suffix for the open month, e.g. "Aug, 24" → "2026 Aug, 24".
+    open_through = (
+        f"{MONTH_LABELS[as_of.month - 1]}, {as_of.day}" if month_open else None
+    )
     years = sorted({d.year for d in m_dates}, reverse=True)
     z: list[list[float | None]] = []
     text: list[list[str]] = []
@@ -1016,12 +1020,7 @@ def _btc_monthly_gains_seed(snapshot: MarketSnapshot) -> dict[str, object]:
         for month in range(1, 13):
             val = ret_by_ym.get((year, month))
             row.append(val)
-            if val is None:
-                trow.append("")
-            elif month_open and year == as_of.year and month == as_of.month:
-                trow.append(f"{val:+.1f} MTD")
-            else:
-                trow.append(f"{val:+.1f}")
+            trow.append("" if val is None else f"{val:+.1f}")
         z.append(row)
         text.append(trow)
 
@@ -1042,6 +1041,8 @@ def _btc_monthly_gains_seed(snapshot: MarketSnapshot) -> dict[str, object]:
         # Axis / cell highlight for the still-open (or latest) month.
         "current_month": MONTH_LABELS[as_of.month - 1],
         "current_year": str(as_of.year),
+        # Compact "Aug, 24" suffix; None when the month closed.
+        "open_through": open_through,
     }
 
 
@@ -1579,8 +1580,8 @@ def render_dashboard_html(
       <p class="heatmap-note">
         Calendar-month close-to-close returns (%). Green = up, red = down;
         intensity scales with magnitude (color clipped at
-        ±{HEATMAP_RET_CAP_PCT:.0f}%). The open month is labeled MTD and
-        highlighted.
+        ±{HEATMAP_RET_CAP_PCT:.0f}%). The open month is highlighted; its
+        year label shows the last daily close used.
       </p>
       <div id="btc-month-heatmap" class="month-heatmap-plot"
            style="min-height:{heat_plot_h}px"></div>
@@ -1599,6 +1600,7 @@ def render_dashboard_html(
   const years = seed.years || [];
   const curMonth = seed.current_month || null;
   const curYear = seed.current_year || null;
+  const through = seed.open_through || null;
   const mi = curMonth != null ? months.indexOf(curMonth) : -1;
   const yi = curYear != null ? years.indexOf(curYear) : -1;
   // Tall enough that every year tick has room; months forced via tickmode.
@@ -1609,22 +1611,39 @@ def render_dashboard_html(
     family: "IBM Plex Sans, Segoe UI, sans-serif"
   };
   const accent = "#f7931a";
+  const asof = "#c9a36a";
   // Bold + accent the current month / year axis labels (Plotly allows <b>/<span>).
+  // Open year reads "2026 Aug, 24" — date quieter than the year.
   const monthTickText = months.map(function (m) {
     if (m !== curMonth) return m;
     return "<b style='color:" + accent + "'>" + m + "</b>";
   });
   const yearTickText = years.map(function (y) {
     if (y !== curYear) return y;
+    if (through) {
+      return (
+        "<b style='color:" + accent + "'>" + y + "</b>" +
+        "<span style='color:" + asof + ";font-size:11px;font-weight:400'> " +
+        through + "</span>"
+      );
+    }
     return "<b style='color:" + accent + "'>" + y + "</b>";
   });
-  // Emphasize the MTD cell value in-grid.
   const cellText = (seed.text || []).map(function (row, r) {
     return (row || []).map(function (cell, c) {
       if (r === yi && c === mi && cell) {
         return "<b>" + cell + "</b>";
       }
       return cell;
+    });
+  });
+  const hoverText = (seed.text || []).map(function (row, r) {
+    return (row || []).map(function (cell, c) {
+      if (!cell) return "";
+      if (r === yi && c === mi && through) {
+        return cell + "% · " + curYear + " " + through;
+      }
+      return cell + "%";
     });
   });
   const shapes = [];
@@ -1665,7 +1684,8 @@ def render_dashboard_html(
     zmid: 0,
     zmin: seed.zmin,
     zmax: seed.zmax,
-    hovertemplate: "%{y} %{x}<br>%{text}%<extra></extra>",
+    customdata: hoverText,
+    hovertemplate: "%{y} %{x}<br>%{customdata}<extra></extra>",
     showscale: true,
     colorbar: {
       title: { text: "%", font: { color: "#9a958c", size: 11 } },
@@ -1681,7 +1701,7 @@ def render_dashboard_html(
   const layout = {
     paper_bgcolor: "#0e1014",
     plot_bgcolor: "#12141a",
-    margin: { l: 72, r: 36, t: 56, b: 52 },
+    margin: { l: through ? 118 : 72, r: through ? 118 : 36, t: 56, b: 52 },
     height: h,
     shapes: shapes,
     // Explicit tickvals so Plotly never skips Jan–Dec or year labels.
