@@ -78,6 +78,10 @@ MONTH_LABELS: tuple[str, ...] = (
 # Cap |return| for the diverging colorscale so a few outliers don't flatten
 # the rest of the calendar (values still shown in cell text / hover).
 HEATMAP_RET_CAP_PCT = 40.0
+# Fat-finger wicks (e.g. Coinbase BTC 2017-04-15 low=0.06 vs ~$1,178 close).
+# Floor/ceil are vs the candle body so real crashes (2020-03-12) are kept.
+WICK_FLOOR = 0.5
+WICK_CEIL = 2.0
 # Bitcoin subsidy cuts (blocks 210k / 420k / 630k / 840k). H5 is 210k blocks
 # after H4 at a 10-minute average and is labeled as an estimate.
 BTC_GENESIS = date(2009, 1, 3)
@@ -173,6 +177,32 @@ def _merge_live_bar(
     lows.append(min(prev, last_px))
     closes.append(last_px)
     volumes.append(0.0)
+
+
+def _clamp_ohlc_wicks(
+    opens: tuple[float, ...] | list[float],
+    highs: tuple[float, ...] | list[float],
+    lows: tuple[float, ...] | list[float],
+    closes: tuple[float, ...] | list[float],
+    *,
+    wick_floor: float = WICK_FLOOR,
+    wick_ceil: float = WICK_CEIL,
+) -> tuple[tuple[float, ...], tuple[float, ...]]:
+    """Replace impossible wicks; leave open/close (returns) unchanged."""
+    new_highs: list[float] = []
+    new_lows: list[float] = []
+    for open_px, high, low, close in zip(opens, highs, lows, closes, strict=True):
+        body_lo = min(open_px, close)
+        body_hi = max(open_px, close)
+        if low <= 0.0 or (body_lo > 0.0 and low < wick_floor * body_lo):
+            low = body_lo
+        if body_hi > 0.0 and high > wick_ceil * body_hi:
+            high = body_hi
+        high = max(high, body_hi, low)
+        low = min(low, body_lo, high)
+        new_highs.append(high)
+        new_lows.append(low)
+    return tuple(new_highs), tuple(new_lows)
 
 
 def _splice_daily_tail(
@@ -800,6 +830,9 @@ def build_snapshot_from_panels(
     btc_lows = tuple(_as_float(x) for x in chart["low"].to_list())
     btc_closes = tuple(_as_float(x) for x in chart["close"].to_list())
     btc_volumes = tuple(_as_float(x) for x in chart["volume"].to_list())
+    btc_highs, btc_lows = _clamp_ohlc_wicks(
+        btc_opens, btc_highs, btc_lows, btc_closes
+    )
 
     vol_sig, vol_label, rel_vol, mtd_vol = _btc_volume_signal(
         btc_dates,
@@ -1357,6 +1390,9 @@ def _long_term_indicator_seed(
     _merge_live_bar(
         date_objs, opens, highs, lows, closes, volumes, live, through=through
     )
+    clamped_h, clamped_l = _clamp_ohlc_wicks(opens, highs, lows, closes)
+    highs[:] = list(clamped_h)
+    lows[:] = list(clamped_l)
 
     dates = [d.isoformat() for d in date_objs]
     # Shade only the in-progress session — never the stale hole before it.

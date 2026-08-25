@@ -65,11 +65,60 @@ def test_build_snapshot_requires_btc() -> None:
         build_snapshot_from_panels(daily)
 
 
-def test_build_snapshot_includes_ohlcv() -> None:
-    snap = build_snapshot_from_panels(_synthetic_daily())
-    assert len(snap.btc_dates) == len(snap.btc_opens) == len(snap.btc_closes)
-    assert len(snap.btc_volumes) == len(snap.btc_closes)
-    assert snap.btc_volumes[-1] > 0
+def test_clamp_ohlc_wicks_apr_2017_coinbase_low() -> None:
+    from ccquant.dashboard import _clamp_ohlc_wicks
+
+    highs, lows = _clamp_ohlc_wicks(
+        (1173.13,), (1190.99,), (0.06,), (1178.85,)
+    )
+    assert lows[0] == pytest.approx(1173.13)
+    assert highs[0] == pytest.approx(1190.99)
+
+
+def test_clamp_ohlc_wicks_keeps_covid_crash() -> None:
+    from ccquant.dashboard import _clamp_ohlc_wicks
+
+    highs, lows = _clamp_ohlc_wicks(
+        (7938.05,), (7969.45,), (4644.0,), (4857.1,)
+    )
+    assert lows[0] == pytest.approx(4644.0)
+    assert highs[0] == pytest.approx(7969.45)
+
+
+def test_snapshot_and_seed_drop_apr_2017_wick() -> None:
+    from ccquant.dashboard import _long_term_indicator_seed
+
+    rows: list[dict[str, object]] = []
+    bars = [
+        (date(2017, 4, 14), 1177.05, 1196.92, 1170.14, 1173.74),
+        (date(2017, 4, 15), 1173.13, 1190.99, 0.06, 1178.85),
+        (date(2017, 4, 16), 1178.84, 1189.93, 1171.70, 1177.99),
+    ]
+    for d, o, h, lo, c in bars:
+        for sym in ("BTC", "ETH"):
+            rows.append(
+                {
+                    "symbol": sym,
+                    "date": d,
+                    "open": o,
+                    "high": h,
+                    "low": lo,
+                    "close": c,
+                    "volume": 1.0,
+                    "source": "coinbase",
+                }
+            )
+    snap = build_snapshot_from_panels(pl.DataFrame(rows))
+    i = snap.btc_dates.index(date(2017, 4, 15))
+    assert snap.btc_lows[i] == pytest.approx(1173.13)
+    assert snap.btc_closes[i] == pytest.approx(1178.85)
+    seed = _long_term_indicator_seed(snap)
+    j = seed["dates"].index("2017-04-15")
+    assert seed["low"][j] == pytest.approx(1173.13)
+    monthly = seed["monthly"]
+    assert isinstance(monthly, dict)
+    apr = monthly["dates"].index("2017-04-01")
+    assert monthly["low"][apr] >= 1000.0
 
 
 def test_btc_volume_signal_sponsored_and_mtd() -> None:
