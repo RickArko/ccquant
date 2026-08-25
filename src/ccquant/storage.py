@@ -560,6 +560,28 @@ class MarketStore:
             )
         return len(candles)
 
+    def daily_dates_since(self, symbol: str, since: date) -> list[date]:
+        """Distinct daily dates for ``symbol`` on/after ``since``."""
+        rows = self._conn.execute(
+            """
+            select distinct date::date as d
+            from ohlcv_daily
+            where symbol = ? and date >= ?
+            order by 1
+            """,
+            [symbol.upper(), since],
+        ).fetchall()
+        out: list[date] = []
+        for row in rows:
+            raw = row[0]
+            if isinstance(raw, datetime):
+                out.append(raw.date())
+            elif isinstance(raw, date):
+                out.append(raw)
+            else:
+                out.append(date.fromisoformat(str(raw)[:10]))
+        return out
+
     def upsert_hourly(self, candles: list[HourlyOhlcv]) -> int:
         for candle in candles:
             self._conn.execute(
@@ -629,6 +651,11 @@ class MarketStore:
                    count(distinct d.date) as daily_rows,
                    min(d.date) as daily_from,
                    max(d.date) as daily_to,
+                   case
+                     when min(d.date) is null then 0
+                     else datediff('day', min(d.date), max(d.date))
+                          + 1 - count(distinct d.date)
+                   end as daily_holes,
                    count(distinct h.hour) as hourly_rows,
                    min(h.hour) as hourly_from,
                    max(h.hour) as hourly_to
@@ -648,9 +675,10 @@ class MarketStore:
                 "daily_rows": row[2],
                 "daily_from": row[3],
                 "daily_to": row[4],
-                "hourly_rows": row[5],
-                "hourly_from": row[6],
-                "hourly_to": row[7],
+                "daily_holes": int(row[5] or 0),
+                "hourly_rows": row[6],
+                "hourly_from": row[7],
+                "hourly_to": row[8],
             }
             for row in rows
         ]

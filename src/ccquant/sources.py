@@ -20,6 +20,12 @@ LOGGER = logging.getLogger(__name__)
 _CG_DEMO_WARNED = False
 
 BINANCE_API = "https://api.binance.com"
+# Spot klines: vision first (api.binance.com is often HTTP 451).
+BINANCE_SPOT_HOSTS = (
+    "https://data-api.binance.vision",
+    "https://api.binance.com",
+    "https://api.binance.us",
+)
 BINANCE_FAPI = "https://fapi.binance.com"
 BYBIT_API = "https://api.bybit.com"
 OKX_API = "https://www.okx.com"
@@ -113,20 +119,52 @@ async def fetch_binance_daily(
     start: date | None = None,
     end: date | None = None,
 ) -> list[DailyOhlcv]:
-    candles: list[DailyOhlcv] = []
     start_ms = _date_ms(start, end_of_day=False) if start else None
     end_ms = _date_ms(end, end_of_day=True) if end else None
+    last_err: httpx.HTTPError | None = None
+    for host in BINANCE_SPOT_HOSTS:
+        try:
+            candles = await _fetch_binance_daily_host(
+                client,
+                host,
+                symbol=symbol,
+                pair=pair,
+                start_ms=start_ms,
+                end_ms=end_ms,
+            )
+            if candles:
+                return candles
+        except httpx.HTTPError as exc:
+            last_err = exc
+            LOGGER.warning("Binance daily %s failed for %s: %s", host, symbol, exc)
+            continue
+    if last_err is not None:
+        raise last_err
+    return []
+
+
+async def _fetch_binance_daily_host(
+    client: httpx.AsyncClient,
+    host: str,
+    *,
+    symbol: str,
+    pair: str,
+    start_ms: int | None,
+    end_ms: int | None,
+) -> list[DailyOhlcv]:
+    candles: list[DailyOhlcv] = []
+    cursor = start_ms
     while True:
         params: dict[str, str | int] = {
             "symbol": pair.upper(),
             "interval": "1d",
             "limit": 1000,
         }
-        if start_ms is not None:
-            params["startTime"] = start_ms
+        if cursor is not None:
+            params["startTime"] = cursor
         if end_ms is not None:
             params["endTime"] = end_ms
-        resp = await client.get(f"{BINANCE_API}/api/v3/klines", params=params)
+        resp = await client.get(f"{host}/api/v3/klines", params=params)
         if resp.status_code == 400:
             return []
         resp.raise_for_status()
@@ -149,7 +187,7 @@ async def fetch_binance_daily(
             )
         if len(batch) < 1000:
             break
-        start_ms = int(batch[-1][0]) + MS_PER_DAY
+        cursor = int(batch[-1][0]) + MS_PER_DAY
     return candles
 
 

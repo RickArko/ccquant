@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from ccquant.config import AppConfig, UniverseConfig
-from ccquant.models import Asset
+from ccquant.models import Asset, DailyOhlcv
 from ccquant.storage import MarketStore
 from ccquant.sync import MarketSync
 
@@ -160,6 +160,154 @@ async def test_backfill_force_reopens_completed_daily_history(
     finally:
         await syncer.close()
         store.close()
+
+
+def _bar(symbol: str, day: date, source: str) -> DailyOhlcv:
+    return DailyOhlcv(
+        symbol=symbol,
+        date=day,
+        open=1.0,
+        high=1.0,
+        low=1.0,
+        close=1.0,
+        volume=1.0,
+        source=source,
+    )
+
+
+@pytest.mark.asyncio
+async def test_fetch_daily_fills_missing_days_from_next_source(
+    tmp_path, monkeypatch
+) -> None:
+    store = MarketStore(tmp_path / "ccquant.duckdb")
+    as_of = date(2026, 7, 26)
+    store.replace_assets(
+        [
+            Asset(
+                rank=1,
+                symbol="BTC",
+                coingecko_id="bitcoin",
+                binance_pair="BTCUSDT",
+                coinbase_product_id="BTC-USD",
+                active=True,
+                as_of_date=as_of,
+            ),
+        ],
+        as_of,
+    )
+
+    async def fake_binance(
+        client: httpx.AsyncClient,
+        *,
+        symbol: str,
+        pair: str,
+        start: date | None,
+        end: date | None,
+    ) -> list[DailyOhlcv]:
+        return [
+            _bar("BTC", date(2026, 7, 18), "binance"),
+            _bar("BTC", date(2026, 7, 26), "binance"),
+        ]
+
+    async def fake_coinbase(
+        client: httpx.AsyncClient,
+        *,
+        symbol: str,
+        product_id: str,
+        start: date | None,
+        end: date,
+    ) -> list[DailyOhlcv]:
+        return [_bar("BTC", date(2026, 7, d), "coinbase") for d in range(19, 26)]
+
+    async def fake_cg(
+        client: httpx.AsyncClient,
+        *,
+        symbol: str,
+        coingecko_id: str,
+        start: date | None,
+        end: date,
+    ) -> list[DailyOhlcv]:
+        return []
+
+    monkeypatch.setattr("ccquant.sync.fetch_binance_daily", fake_binance)
+    monkeypatch.setattr("ccquant.sync.fetch_coinbase_daily", fake_coinbase)
+    monkeypatch.setattr("ccquant.sync.fetch_coingecko_daily", fake_cg)
+    syncer = MarketSync(
+        store,
+        AppConfig(
+            database=tmp_path / "ccquant.duckdb",
+            universe=UniverseConfig(request_delay_seconds=0),
+        ),
+    )
+    try:
+        candles = await syncer._fetch_daily(
+            store.active_assets()[0],
+            start=date(2026, 7, 18),
+            end=date(2026, 7, 26),
+        )
+    finally:
+        await syncer.close()
+        store.close()
+
+    by_day = {c.date: c.source for c in candles}
+    assert by_day[date(2026, 7, 18)] == "binance"
+    assert by_day[date(2026, 7, 26)] == "binance"
+    for d in range(19, 26):
+        assert by_day[date(2026, 7, d)] == "coinbase"
+
+
+@pytest.mark.asyncio
+async def test_repair_daily_fetches_from_first_hole(tmp_path, monkeypatch) -> None:
+    store = MarketStore(tmp_path / "ccquant.duckdb")
+    as_of = date(2026, 8, 1)
+    store.replace_assets(
+        [
+            Asset(
+                rank=1,
+                symbol="BTC",
+                coingecko_id="bitcoin",
+                binance_pair="BTCUSDT",
+                coinbase_product_id="BTC-USD",
+                active=True,
+                as_of_date=as_of,
+            ),
+        ],
+        as_of,
+    )
+    store.upsert_daily(
+        [
+            _bar("BTC", date(2026, 7, 18), "coinbase"),
+            _bar("BTC", date(2026, 7, 26), "coinbase"),
+        ]
+    )
+    seen: list[date | None] = []
+
+    async def fake_fetch(
+        self: MarketSync,
+        asset: Asset,
+        *,
+        start: date | None,
+        end: date,
+    ) -> list[DailyOhlcv]:
+        seen.append(start)
+        return [_bar("BTC", date(2026, 7, d), "binance") for d in range(19, 26)]
+
+    monkeypatch.setattr(MarketSync, "_fetch_daily", fake_fetch)
+    syncer = MarketSync(
+        store,
+        AppConfig(
+            database=tmp_path / "ccquant.duckdb",
+            universe=UniverseConfig(request_delay_seconds=0),
+        ),
+    )
+    try:
+        results = await syncer.repair_daily(since_days=90, symbols=["BTC"])
+    finally:
+        await syncer.close()
+        store.close()
+
+    assert seen == [date(2026, 7, 19)]
+    assert results["BTC"] == 7
 
 
 

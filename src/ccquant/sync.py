@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 import httpx
 
 from ccquant.config import AppConfig
+from ccquant.integrity import daily_tail_start, interior_calendar_holes
 from ccquant.models import (
     Asset,
     DailyOhlcv,
@@ -147,13 +148,39 @@ class MarketSync:
         )
         if force:
             state.backfill_complete = False
-        start = None if full and not state.backfill_complete else (
-            today - timedelta(days=self.config.daily.tail_days)
+        lookback = max(
+            self.config.daily.tail_days, self.config.daily.hole_lookback_days
         )
+        window_start = today - timedelta(days=lookback)
+        if full and not state.backfill_complete:
+            start = None
+        else:
+            stored = self.store.daily_dates_since(asset.symbol, window_start)
+            start = daily_tail_start(
+                today=today,
+                tail_days=self.config.daily.tail_days,
+                latest_at=state.latest_at,
+                stored_dates=stored,
+                hole_lookback_days=self.config.daily.hole_lookback_days,
+            )
         candles = await self._fetch_daily(asset, start=start, end=today)
         count = self.store.upsert_daily(candles)
         _update_state(state, [c.date for c in candles], full=full)
         self.store.upsert_state(state)
+        remaining = interior_calendar_holes(
+            self.store.daily_dates_since(asset.symbol, window_start),
+            start=window_start,
+            end=today,
+        )
+        if remaining:
+            LOGGER.warning(
+                "daily calendar holes remain for %s: %s .. %s (%d days) — "
+                "run: uv run ccquant sync repair --interval 1d",
+                asset.symbol,
+                remaining[0],
+                remaining[-1],
+                len(remaining),
+            )
         return count
 
     async def backfill_hourly(
@@ -533,6 +560,67 @@ class MarketSync:
                 results["mstr"] = 0
         return results
 
+    async def repair_daily(
+        self,
+        *,
+        since_days: int | None = None,
+        top: int | None = None,
+        symbols: list[str] | None = None,
+    ) -> dict[str, int]:
+        """Re-fetch interior daily holes in the lookback window."""
+        today = datetime.now(tz=UTC).date()
+        lookback = since_days if since_days is not None else (
+            self.config.daily.hole_lookback_days
+        )
+        window_start = today - timedelta(days=max(lookback, 0))
+        if symbols:
+            wanted = {s.upper() for s in symbols}
+            assets = [
+                a
+                for a in self.store.active_assets(limit=top)
+                if a.symbol in wanted
+            ]
+            if not assets:
+                assets = [
+                    a for a in self.store.active_assets() if a.symbol in wanted
+                ]
+        else:
+            assets = self.store.active_assets(limit=top)
+        results: dict[str, int] = {}
+        for asset in assets:
+            stored = self.store.daily_dates_since(asset.symbol, window_start)
+            holes = interior_calendar_holes(
+                stored, start=window_start, end=today
+            )
+            if not holes:
+                results[asset.symbol] = 0
+                continue
+            candles = await self._fetch_daily(
+                asset, start=holes[0], end=today
+            )
+            results[asset.symbol] = self.store.upsert_daily(candles)
+            state = self.store.get_state(asset.symbol, "1d") or SyncState(
+                symbol=asset.symbol,
+                interval="1d",
+            )
+            _update_state(state, [c.date for c in candles], full=False)
+            self.store.upsert_state(state)
+            remaining = interior_calendar_holes(
+                self.store.daily_dates_since(asset.symbol, window_start),
+                start=window_start,
+                end=today,
+            )
+            if remaining:
+                LOGGER.warning(
+                    "repair left daily holes for %s: %s .. %s (%d days)",
+                    asset.symbol,
+                    remaining[0],
+                    remaining[-1],
+                    len(remaining),
+                )
+            await asyncio.sleep(self.config.universe.request_delay_seconds)
+        return results
+
     async def _fetch_daily(
         self,
         asset: Asset,
@@ -540,44 +628,81 @@ class MarketSync:
         start: date | None,
         end: date,
     ) -> list[DailyOhlcv]:
+        """Fetch daily bars, filling missing days from the next venue."""
         client = await self.client()
-        if asset.binance_pair and self.config.universe.source_preference == "binance":
+        merged: dict[date, DailyOhlcv] = {}
+        hole_from = (
+            start
+            if start is not None
+            else end - timedelta(days=self.config.daily.hole_lookback_days)
+        )
+
+        def _absorb(batch: list[DailyOhlcv]) -> None:
+            for candle in batch:
+                merged.setdefault(candle.date, candle)
+
+        def _holes() -> tuple[date, ...]:
+            if not merged:
+                return (end,)
+            return interior_calendar_holes(
+                tuple(merged), start=hole_from, end=end
+            )
+
+        prefer_binance = (
+            bool(asset.binance_pair)
+            and self.config.universe.source_preference == "binance"
+        )
+        if prefer_binance and asset.binance_pair:
             try:
-                candles = await fetch_binance_daily(
-                    client,
-                    symbol=asset.symbol,
-                    pair=asset.binance_pair,
-                    start=start,
-                    end=end,
+                _absorb(
+                    await fetch_binance_daily(
+                        client,
+                        symbol=asset.symbol,
+                        pair=asset.binance_pair,
+                        start=start,
+                        end=end,
+                    )
                 )
-                if candles:
-                    return candles
             except httpx.HTTPError as exc:
                 LOGGER.warning("%s", _binance_fallback_msg(asset.symbol, "daily", exc))
 
-        if asset.coinbase_product_id:
+        holes = _holes()
+        if holes and asset.coinbase_product_id:
+            cb_start = holes[0] if merged else start
             try:
-                candles = await fetch_coinbase_daily(
-                    client,
-                    symbol=asset.symbol,
-                    product_id=asset.coinbase_product_id,
-                    start=start,
-                    end=end,
+                _absorb(
+                    await fetch_coinbase_daily(
+                        client,
+                        symbol=asset.symbol,
+                        product_id=asset.coinbase_product_id,
+                        start=cb_start,
+                        end=end,
+                    )
                 )
-                if candles:
-                    return candles
             except httpx.HTTPError as exc:
                 LOGGER.warning(
                     "Coinbase daily fetch failed for %s: %s", asset.symbol, exc
                 )
 
-        return await fetch_coingecko_daily(
-            client,
-            symbol=asset.symbol,
-            coingecko_id=asset.coingecko_id,
-            start=start,
-            end=end,
-        )
+        holes = _holes()
+        if holes:
+            cg_start = holes[0] if merged else start
+            try:
+                _absorb(
+                    await fetch_coingecko_daily(
+                        client,
+                        symbol=asset.symbol,
+                        coingecko_id=asset.coingecko_id,
+                        start=cg_start,
+                        end=end,
+                    )
+                )
+            except httpx.HTTPError as exc:
+                LOGGER.warning(
+                    "CoinGecko daily fetch failed for %s: %s", asset.symbol, exc
+                )
+
+        return sorted(merged.values(), key=lambda c: c.date)
 
     async def _fetch_hourly(
         self,

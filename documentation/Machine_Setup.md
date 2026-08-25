@@ -23,7 +23,8 @@ cp .env.example .env   # then fill free keys (see below)
 Recommended first install:
 
 ```bash
-uv sync --extra dbt
+make install
+# leaner: uv sync --extra dbt && make dbt-deps
 # add --extra wallet only when you intend to enable wallet sync
 ```
 
@@ -57,7 +58,8 @@ Transfer:
 ### On the new machine
 
 ```bash
-uv sync --extra dbt
+make install
+# or: uv sync --extra dbt && make dbt-deps
 uv run ccquant sync bootstrap --from-backup ~/Transfers/ccquant-YYYYMMDD-HHMMSS.duckdb --force-restore
 uv run ccquant status
 ```
@@ -85,7 +87,8 @@ Use only when you have no DuckDB to copy. This pulls **full daily history** once
 (Binance → Coinbase → CoinGecko), which is free but slow.
 
 ```bash
-uv sync --extra dbt
+make install
+# or: uv sync --extra dbt && make dbt-deps
 # .env: FRED_API_KEY + CG_DEMO_API_KEY; leave BID unset
 uv run ccquant sync bootstrap --cold --dry-run
 uv run ccquant sync bootstrap --cold

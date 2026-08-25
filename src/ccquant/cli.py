@@ -48,15 +48,38 @@ def _load(config: str | None) -> tuple[MarketStore, AppConfig]:
     return MarketStore(cfg.database), cfg
 
 
+def _dbt_packages_installed() -> bool:
+    root = DBT_PROJECT_DIR / "dbt_packages"
+    if not root.is_dir():
+        return False
+    return any(
+        path.is_dir() and not path.name.startswith(".") for path in root.iterdir()
+    )
+
+
+def _ensure_dbt_packages() -> bool:
+    """Install Hub packages when ``dbt/dbt_packages`` is empty (gitignored)."""
+    if _dbt_packages_installed():
+        return True
+    console.print("[dim]dbt packages missing — running dbt deps...[/dim]")
+    return _run_dbt("deps")
+
+
 def _run_dbt(command: str, *args: str) -> bool:
     """Run a dbt subcommand. Returns True on success, False if dbt not found."""
     dbt_bin = shutil.which("dbt")
     if dbt_bin is None:
         console.print(
             "[yellow]dbt not installed — skipping dbt step.[/yellow]"
-            " Install with: uv sync --extra dbt"
+            " Install with: make install  (or uv sync --extra dbt && make dbt-deps)"
         )
         return False
+    if command != "deps" and not _dbt_packages_installed():
+        if not _ensure_dbt_packages():
+            console.print(
+                "[yellow]dbt deps failed — run: make dbt-deps[/yellow]"
+            )
+            return False
     cmd = [
         dbt_bin,
         command,
@@ -128,6 +151,48 @@ def sync_backfill(
     console.print(f"[green]{interval} sync complete: {total} candles[/green]")
     for symbol, count in sorted(results.items()):
         console.print(f"  {symbol}: {count}")
+
+
+@sync_app.command("repair")
+def sync_repair(
+    config: str | None = typer.Option(None, "--config", "-c"),
+    interval: Annotated[
+        str,
+        typer.Option("--interval", "-i", help="1d (hourly repair not yet)"),
+    ] = "1d",
+    since: int = typer.Option(
+        90, "--since", help="Look back this many days for interior holes"
+    ),
+    top: int | None = typer.Option(None, "--top", help="Limit to top-N ranked assets"),
+    symbol: str | None = typer.Option(
+        None, "--symbol", help="Repair one symbol (e.g. BTC)"
+    ),
+) -> None:
+    """Re-fetch missing calendar days in daily OHLCV (interior holes)."""
+    if interval != "1d":
+        raise typer.BadParameter("repair currently supports --interval 1d")
+    store, cfg = _load(config)
+    syncer = MarketSync(store, cfg)
+
+    async def run() -> dict[str, int]:
+        try:
+            return await syncer.repair_daily(
+                since_days=since,
+                top=top,
+                symbols=[symbol] if symbol else None,
+            )
+        finally:
+            await syncer.close()
+            store.close()
+
+    results = asyncio.run(run())
+    filled = {sym: n for sym, n in results.items() if n}
+    console.print(
+        f"[green]Daily repair: {sum(results.values())} candles "
+        f"across {len(filled)} symbols with holes[/green]"
+    )
+    for sym, count in sorted(filled.items()):
+        console.print(f"  {sym}: {count}")
 
 
 @sync_app.command("oi")
@@ -337,20 +402,34 @@ def _print_status_table(store: MarketStore) -> None:
         "rank",
         "daily rows",
         "daily range",
+        "daily holes",
         "hourly rows",
         "hourly range",
     ]:
         table.add_column(col)
+    gapped: list[str] = []
     for row in store.status_rows():
+        raw_holes = row.get("daily_holes", 0)
+        holes = raw_holes if isinstance(raw_holes, int) else 0
+        if holes:
+            gapped.append(f"{row['symbol']} ({holes})")
         table.add_row(
             str(row["symbol"]),
             str(row["rank"]),
             str(row["daily_rows"]),
             f"{row['daily_from'] or '-'} -> {row['daily_to'] or '-'}",
+            str(holes),
             str(row["hourly_rows"]),
             f"{row['hourly_from'] or '-'} -> {row['hourly_to'] or '-'}",
         )
     console.print(table)
+    if gapped:
+        shown = ", ".join(gapped[:15])
+        extra = f" +{len(gapped) - 15} more" if len(gapped) > 15 else ""
+        console.print(f"[red]Daily calendar holes: {shown}{extra}[/red]")
+        console.print(
+            "[dim]Heal with: uv run ccquant sync repair --interval 1d[/dim]"
+        )
 
 
 def _env_flag(name: str) -> str:
@@ -833,51 +912,17 @@ def sync_all(
     store, _cfg = _load(config)
     try:
         console.print()
-        table = Table(title="ccquant data status")
-        for col in [
-            "symbol", "rank", "daily rows", "daily range",
-            "hourly rows", "hourly range",
-        ]:
-            table.add_column(col)
-        for row in store.status_rows():
-            table.add_row(
-                str(row["symbol"]),
-                str(row["rank"]),
-                str(row["daily_rows"]),
-                f"{row['daily_from'] or '-'} -> {row['daily_to'] or '-'}",
-                str(row["hourly_rows"]),
-                f"{row['hourly_from'] or '-'} -> {row['hourly_to'] or '-'}",
-            )
-        console.print(table)
+        _print_status_table(store)
     finally:
         store.close()
 
 
 @app.command("status")
 def status(config: str | None = typer.Option(None, "--config", "-c")) -> None:
-    """Show stored row counts and date ranges."""
+    """Show stored row counts, date ranges, and daily calendar holes."""
     store, _cfg = _load(config)
     try:
-        table = Table(title="ccquant data status")
-        for col in [
-            "symbol",
-            "rank",
-            "daily rows",
-            "daily range",
-            "hourly rows",
-            "hourly range",
-        ]:
-            table.add_column(col)
-        for row in store.status_rows():
-            table.add_row(
-                str(row["symbol"]),
-                str(row["rank"]),
-                str(row["daily_rows"]),
-                f"{row['daily_from'] or '-'} -> {row['daily_to'] or '-'}",
-                str(row["hourly_rows"]),
-                f"{row['hourly_from'] or '-'} -> {row['hourly_to'] or '-'}",
-            )
-        console.print(table)
+        _print_status_table(store)
     finally:
         store.close()
 

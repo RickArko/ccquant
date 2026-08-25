@@ -31,6 +31,7 @@ def load_project_dotenv(start: Path | None = None) -> Path | None:
 @dataclass(frozen=True)
 class DailyConfig:
     tail_days: int = 7
+    hole_lookback_days: int = 90
 
 
 @dataclass(frozen=True)
@@ -273,7 +274,10 @@ def load_config(path: str | Path | None = None) -> AppConfig:
                 universe_data.get("request_delay_seconds", 0.25)
             ),
         ),
-        daily=DailyConfig(tail_days=int(daily_data.get("tail_days", 7))),
+        daily=DailyConfig(
+            tail_days=int(daily_data.get("tail_days", 7)),
+            hole_lookback_days=int(daily_data.get("hole_lookback_days", 90)),
+        ),
         hourly=HourlyConfig(
             enabled=bool(hourly_data.get("enabled", True)),
             top=int(hourly_data.get("top", 10)),

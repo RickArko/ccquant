@@ -13,6 +13,7 @@ universe:
   request_delay_seconds: 0.25
 daily:
   tail_days: 7
+  hole_lookback_days: 90
 hourly:
   enabled: true
   top: 10

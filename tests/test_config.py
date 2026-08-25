@@ -9,4 +9,5 @@ def test_load_default_config(monkeypatch) -> None:
     assert str(cfg.database) == "data/ccquant.duckdb"
     assert cfg.universe.size == 100
     assert cfg.hourly.enabled is True
+    assert cfg.daily.hole_lookback_days == 90
 

@@ -9,32 +9,23 @@ statistical, ML, and foundation-model experiments.
 ## Quickstart
 
 ```bash
-# Default local install — lint/test (pre-commit) + ipykernel + Jupyter/plotly +
-# forecast libs (`dependency-groups.dev` is on by default)
-uv sync
-uv run python -m ipykernel install --user --name=ccquant --display-name="Python (ccquant)"
-uv run pre-commit install
+# Full local install (Python extras + dbt Hub packages + kernel + hooks)
+make install
+# equivalent:
+# uv sync --all-extras --all-groups
+# uv run pre-commit install
+# uv run dbt deps --project-dir dbt --profiles-dir dbt
+# uv run python -m ipykernel install --user --name=ccquant --display-name="Python (ccquant)"
 
-# Full local install (all extras + dependency groups)
-uv sync --all-extras --all-groups
-
-# Or pick tiers explicitly:
-# CLI + tests + notebooks (same notebook packages as default `uv sync`)
-uv sync --extra dev
-
-# + forecasting libs (also in default dependency-groups.dev now)
-uv sync --extra dev --extra forecast
-
-# Full pipeline incl. dbt + wallet/BigQuery
-uv sync --extra dev --extra forecast --extra dbt --extra wallet
-
-uv run ccquant sync all                     # universe + OHLCV + OI + depth + MEV + macro + wallets + dbt
-uv run ccquant sync universe --size 100
-uv run ccquant sync backfill --interval 1d
+# Sync Database
+# full universe + OHLCV + OI + depth + MEV + macro + wallets + dbt
+ccquant sync all
+ccquant sync universe --size 100
+ccquant sync backfill --interval 1d
 # If history looks too short (e.g. after a geo-blocked Binance run marked complete):
-# uv run ccquant sync backfill --interval 1d --force --top 50
-uv run ccquant sync backfill --interval 1h --top 10
-uv run ccquant status
+#ccquant sync backfill --interval 1d --force --top 50
+ccquant sync backfill --interval 1h --top 10
+ccquant status
 ```
 
 ### New machine / Mac Mini
@@ -43,12 +34,12 @@ Prefer **copy-first** (DuckDB backup) over a cold API backfill — see
 [`documentation/Machine_Setup.md`](documentation/Machine_Setup.md):
 
 ```bash
-# On source: uv run ccquant db backup --dest data/backups
+# On source:ccquant db backup --dest data/backups
 # On new machine:
-uv run ccquant sync bootstrap --from-backup PATH/ccquant-YYYYMMDD-HHMMSS.duckdb --force-restore
+ccquant sync bootstrap --from-backup PATH/ccquant-YYYYMMDD-HHMMSS.duckdb --force-restore
 # No backup? staged cold sync (BID/wallets off by default):
-# uv run ccquant sync bootstrap --cold --dry-run
-# uv run ccquant sync bootstrap --cold -c config/lean.yaml
+#ccquant sync bootstrap --cold --dry-run
+#ccquant sync bootstrap --cold -c config/lean.yaml
 ```
 
 **Notebooks in VS Code / Cursor:** after `uv sync`, select the project interpreter
@@ -65,9 +56,9 @@ uv run jupyter lab notebooks/
 ### Wallet intelligence (Solana + Arbitrum + Bitcoin)
 
 ```bash
-uv run ccquant sync wallets --no-tail
-uv run ccquant wallet import-extract --source bigquery --chain bitcoin
-uv run ccquant wallet discover --chain bitcoin --top 20
+ccquant sync wallets --no-tail
+ccquant wallet import-extract --source bigquery --chain bitcoin
+ccquant wallet discover --chain bitcoin --top 20
 uv run dbt build --select fct_btc_* fct_wallet_* mart_signals_daily --project-dir dbt --profiles-dir dbt
 ```
 
@@ -231,3 +222,11 @@ bitcoinisdata.com / Glassnode for valuation metrics.
 > Run the notebooks interactively for full hover tooltips, range sliders, and
 > live data. See [`documentation/API_Pricing.md`](documentation/API_Pricing.md)
 > for data source setup and API key configuration.
+
+
+## Dashboard Update
+
+```bash
+uv run ccquant sync all          # universe + OHLCV + OI + depth + MEV + FRED + onchain + ETF + wallets + tweets + dbt
+uv run ccquant dashboard         # rewrite data/export/market_tracker.html
+```
