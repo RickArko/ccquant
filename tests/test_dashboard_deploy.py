@@ -97,6 +97,7 @@ def test_nginx_conf_has_healthz_and_security_headers() -> None:
     assert "X-Frame-Options" in conf
     assert "Content-Security-Policy" in conf
     assert "listen 8080" in conf
+    assert "no-cache" in conf
     for host in CONNECT_SRC_HOSTS:
         assert host in conf
 
@@ -121,3 +122,30 @@ def test_fly_toml_autostop_and_domain_port() -> None:
 def test_gitignore_excludes_staged_html() -> None:
     text = (ROOT / ".gitignore").read_text(encoding="utf-8")
     assert "deploy/public/*.html" in text
+
+
+def test_refresh_script_is_lean_and_deploys() -> None:
+    text = (ROOT / "scripts" / "dashboard_refresh.sh").read_text(encoding="utf-8")
+    assert "--no-wallets" in text
+    assert "--no-tweets" in text
+    assert "--no-depth" in text
+    assert "--no-mev" in text
+    assert "make dashboard.deploy" in text
+
+
+def test_launchd_plist_is_twice_daily() -> None:
+    text = (ROOT / "deploy" / "com.ccquant.dashboard-refresh.plist.in").read_text(
+        encoding="utf-8"
+    )
+    assert "StartCalendarInterval" in text
+    assert "<integer>2</integer>" in text
+    assert "<integer>18</integer>" in text
+    assert "dashboard_refresh.sh" in text
+    assert "__CCQUANT_ROOT__" in text
+
+
+def test_makefile_has_dashboard_refresh() -> None:
+    text = (ROOT / "Makefile").read_text(encoding="utf-8")
+    assert "dashboard.refresh" in text
+    assert "dashboard.schedule" in text
+    assert "scripts/dashboard_refresh.sh" in text

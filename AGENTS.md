@@ -55,6 +55,8 @@ uv run ccquant db restore --source PATH [--force]  # restore backup into CCQUANT
 uv run ccquant status
 uv run ccquant dashboard [--out PATH] [--no-open] [--live-range 1h] [--live-interval 5m] [--no-live]  # Market Tracker HTML (+ candle tape)
 make dashboard.deploy            # publish Market Tracker to btc.rickarko.com
+make dashboard.refresh           # lean tail-sync + publish (skip wallets/tweets/depth/MEV)
+make dashboard.schedule          # launchd 02:15 + 18:15 local on this Mac
 uv run ccquant sync onchain [--force]                    # blockchain.info + BID (skips when fresh unless --force)
 uv run ccquant sync etf                                  # Farside BTC ETF flows + Yahoo MSTR
 uv run ccquant research run --strategy cs_mom_simple     # multi-year CS momentum (panel: daily)

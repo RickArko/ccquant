@@ -80,14 +80,35 @@ paste the Fly-printed records into Route 53 by hand.
 
 ## 4. Routine publish
 
+Manual:
+
 ```bash
 uv run ccquant sync all          # or a cheaper tail; operator choice
 make dashboard.deploy            # stage + check + fly deploy
 make fly.smoke
 ```
 
-`make fly.deploy` is the same path (`dashboard.stage` → `dashboard.check`
-→ `fly deploy`). There is no skip flag for the checker.
+**Automated (recommended on the Mac Mini that holds DuckDB):**
+
+The live tape (hero candles / Latest) already polls Binance every 15s in the
+browser. Daily charts, heatmap, metrics (1d/7d/YTD), regime chips, and
+outlook are a **snapshot** from the last publish. Without a schedule they
+stay frozen until you run deploy again.
+
+```bash
+make dashboard.refresh           # lean sync + publish (skip wallets/tweets/depth/MEV)
+make dashboard.schedule          # launchd: 02:15 and 18:15 local, twice daily
+# logs: data/logs/dashboard-refresh.log
+# make dashboard.unschedule      # remove the job
+```
+
+`dashboard.refresh` still runs on-chain (BID is skipped when the series is
+already fresh) plus ETF/MSTR, FRED, daily/hourly tails, and dbt. The
+footer **Published … CT** timestamp is the snapshot time; hard-refresh the
+page after a publish (`Cache-Control: no-cache`).
+
+`make fly.deploy` is the same path as `dashboard.deploy` (`dashboard.stage`
+→ `dashboard.check` → `fly deploy`). There is no skip flag for the checker.
 
 Staged HTML is gitignored (`deploy/public/*.html`). Never commit DuckDB,
 `.env`, or the rendered snapshot.
@@ -128,6 +149,7 @@ deploy is stuck and you know why.
 | `ccquant dashboard` errors | Empty or stale DuckDB | `uv run ccquant status`; restore via [`Machine_Setup.md`](Machine_Setup.md) / `sync bootstrap` |
 | Live tape blank, rest of page OK | Geo-blocked Binance | Expected fallback to Coinbase in the page JS; not a Fly outage |
 | First request slow | Autostop cold start (2–5s) | Not a bug. Keep a machine running only if it bothers you |
+| Daily charts / outlook look yesterday | Snapshot not republished | `make dashboard.refresh` or `make dashboard.schedule` |
 | Charts blank, chrome loads | Plotly CDN outage | Page still useful; vendoring Plotly is a later change |
 | `dashboard.check` fails | Secret-like substring or stub HTML | Do **not** deploy. Inspect `deploy/public/index.html` |
 | Docker build `test -s index.html` fails | Forgot `dashboard.stage` | `make dashboard.stage` then deploy again |

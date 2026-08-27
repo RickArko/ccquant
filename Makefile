@@ -9,10 +9,15 @@ FLY_DOMAIN     ?= btc.rickarko.com
 DASHBOARD_OUT  ?= deploy/public/index.html
 DASHBOARD_LOCAL ?= data/export/market_tracker.html
 PORT           ?= 8080
+LAUNCH_LABEL   ?= com.ccquant.dashboard-refresh
+LAUNCH_AGENTS  ?= $(HOME)/Library/LaunchAgents
+LAUNCH_PLIST   ?= $(LAUNCH_AGENTS)/$(LAUNCH_LABEL).plist
+LAUNCH_UID     ?= $(shell id -u)
 
 .PHONY: help install dbt-deps \
 	dashboard dashboard.stage dashboard.check dashboard.serve \
-	dashboard.deploy fly.app fly.certs fly.deploy fly.status fly.logs fly.smoke
+	dashboard.deploy dashboard.refresh dashboard.schedule dashboard.unschedule \
+	fly.app fly.certs fly.deploy fly.status fly.logs fly.smoke
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*?## "; printf "\nccquant — make targets\n\n"} \
@@ -48,6 +53,22 @@ dashboard.serve: dashboard.stage ## Build+run the nginx image locally on $(PORT)
 	docker run --rm -p $(PORT):8080 ccquant-btc:local
 
 dashboard.deploy: fly.deploy ## Alias: stage + check + fly deploy
+
+dashboard.refresh: ## Lean tail-sync (no wallets/tweets/depth/MEV) then publish to Fly
+	bash scripts/dashboard_refresh.sh
+
+dashboard.schedule: ## Install launchd job (02:15 and 18:15 local) for dashboard.refresh
+	@mkdir -p "$(LAUNCH_AGENTS)"
+	@sed -e 's|__CCQUANT_ROOT__|$(CURDIR)|g' -e 's|__HOME__|$(HOME)|g' \
+		deploy/com.ccquant.dashboard-refresh.plist.in > "$(LAUNCH_PLIST)"
+	@launchctl bootout "gui/$(LAUNCH_UID)/$(LAUNCH_LABEL)" >/dev/null 2>&1 || true
+	launchctl bootstrap "gui/$(LAUNCH_UID)" "$(LAUNCH_PLIST)"
+	@printf 'scheduled %s (02:15 and 18:15 local). Logs: data/logs/dashboard-refresh.log\n' "$(LAUNCH_LABEL)"
+
+dashboard.unschedule: ## Remove the launchd dashboard.refresh job
+	@launchctl bootout "gui/$(LAUNCH_UID)/$(LAUNCH_LABEL)" >/dev/null 2>&1 || true
+	@rm -f "$(LAUNCH_PLIST)"
+	@printf 'unscheduled %s\n' "$(LAUNCH_LABEL)"
 
 fly.app: ## Create Fly app (idempotent if $(FLY_APP) already exists)
 	@if $(FLY) status --app $(FLY_APP) >/dev/null 2>&1; then \

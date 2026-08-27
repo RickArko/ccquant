@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.ccquant.dashboard-refresh</string>
+	<key>WorkingDirectory</key>
+	<string>__CCQUANT_ROOT__</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>__CCQUANT_ROOT__/scripts/dashboard_refresh.sh</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>__HOME__</string>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:__HOME__/.fly/bin:/usr/bin:/bin</string>
+		<key>LANG</key>
+		<string>en_US.UTF-8</string>
+	</dict>
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict>
+			<key>Hour</key>
+			<integer>2</integer>
+			<key>Minute</key>
+			<integer>15</integer>
+		</dict>
+		<dict>
+			<key>Hour</key>
+			<integer>18</integer>
+			<key>Minute</key>
+			<integer>15</integer>
+		</dict>
+	</array>
+	<key>Nice</key>
+	<integer>10</integer>
+	<key>RunAtLoad</key>
+	<false/>
+</dict>
+</plist>

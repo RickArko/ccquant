@@ -3315,6 +3315,7 @@ def render_dashboard_html(
         f"{html.escape(snapshot.headline)} · "
         f"{html.escape(snapshot.stack_label)}"
     )
+    published = datetime.now(DASHBOARD_TZ).strftime("%Y-%m-%d %H:%M %Z")
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -3698,10 +3699,10 @@ def render_dashboard_html(
     </section>
     {heatmap_html}
     <footer>
-      {html.escape(snapshot.freshness_note)}{html.escape(gap_note)}
+      Published {html.escape(published)}
+      · {html.escape(snapshot.freshness_note)}{html.escape(gap_note)}
       · Regime-conditional research only —
       not a prediction.
-      · Refresh: <code>uv run ccquant sync all</code>
       · Live tape polls Binance every 15s in-browser when allowed.
     </footer>
   </main>
