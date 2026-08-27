@@ -104,11 +104,12 @@ def test_nginx_conf_has_healthz_and_security_headers() -> None:
 
 def test_dockerfile_is_nginx_not_python() -> None:
     text = (ROOT / "deploy" / "Dockerfile").read_text(encoding="utf-8")
-    assert "FROM nginx" in text
+    assert "FROM nginx:1.30.4-alpine" in text
     lowered = text.lower()
     assert "src/ccquant" not in lowered
     assert "duckdb" not in lowered
     assert "uv sync" not in lowered
+    assert "1.27" not in text
 
 
 def test_fly_toml_autostop_and_domain_port() -> None:
@@ -142,6 +143,8 @@ def test_launchd_plist_is_twice_daily() -> None:
     assert "<integer>18</integer>" in text
     assert "dashboard_refresh.sh" in text
     assert "__CCQUANT_ROOT__" in text
+    assert "__LAUNCH_LABEL__" in text
+    assert "<string>com.ccquant.dashboard-refresh</string>" not in text
 
 
 def test_makefile_has_dashboard_refresh() -> None:
@@ -149,3 +152,6 @@ def test_makefile_has_dashboard_refresh() -> None:
     assert "dashboard.refresh" in text
     assert "dashboard.schedule" in text
     assert "scripts/dashboard_refresh.sh" in text
+    assert "DASHBOARD_STAGE := deploy/public/index.html" in text
+    assert "DASHBOARD_OUT" not in text
+    assert "__LAUNCH_LABEL__|$(LAUNCH_LABEL)" in text

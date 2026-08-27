@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Static Market Tracker image — nginx only. No Python, no research DB, no secrets.
-FROM nginx:1.27-alpine
+FROM nginx:1.30.4-alpine
 
 RUN apk add --no-cache curl \
     && rm -rf /usr/share/nginx/html/*

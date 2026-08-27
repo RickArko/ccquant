@@ -6,7 +6,8 @@ FLY            ?= $(or $(shell command -v fly 2>/dev/null),$(shell command -v fl
 FLY_APP        ?= ccquant-btc
 FLY_REGION     ?= ord
 FLY_DOMAIN     ?= btc.rickarko.com
-DASHBOARD_OUT  ?= deploy/public/index.html
+# Fly image always COPY deploy/public/index.html — not overridable.
+DASHBOARD_STAGE := deploy/public/index.html
 DASHBOARD_LOCAL ?= data/export/market_tracker.html
 PORT           ?= 8080
 LAUNCH_LABEL   ?= com.ccquant.dashboard-refresh
@@ -22,8 +23,8 @@ LAUNCH_UID     ?= $(shell id -u)
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*?## "; printf "\nccquant — make targets\n\n"} \
 	     /^[a-zA-Z_.-]+:.*?## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
-	@printf "\nVariables: FLY_APP=%s FLY_DOMAIN=%s DASHBOARD_OUT=%s\n\n" \
-		"$(FLY_APP)" "$(FLY_DOMAIN)" "$(DASHBOARD_OUT)"
+	@printf "\nVariables: FLY_APP=%s FLY_DOMAIN=%s DASHBOARD_STAGE=%s\n\n" \
+		"$(FLY_APP)" "$(FLY_DOMAIN)" "$(DASHBOARD_STAGE)"
 
 install: ## uv sync --all-extras --all-groups + pre-commit + dbt deps + kernel
 	uv sync --all-extras --all-groups
@@ -37,12 +38,12 @@ dbt-deps: ## install Hub packages into dbt/dbt_packages (required before dbt bui
 dashboard: ## Write local Market Tracker HTML ($(DASHBOARD_LOCAL))
 	uv run ccquant dashboard --no-open --out "$(DASHBOARD_LOCAL)"
 
-dashboard.stage: ## Generate staged HTML for the Fly image ($(DASHBOARD_OUT))
+dashboard.stage: ## Generate staged HTML for the Fly image ($(DASHBOARD_STAGE))
 	mkdir -p deploy/public
-	uv run ccquant dashboard --no-open --out "$(DASHBOARD_OUT)"
+	uv run ccquant dashboard --no-open --out "$(DASHBOARD_STAGE)"
 
 dashboard.check: ## Secret-scan + size/marker gate on staged HTML
-	uv run python scripts/dashboard_check.py "$(DASHBOARD_OUT)"
+	uv run python scripts/dashboard_check.py "$(DASHBOARD_STAGE)"
 
 dashboard.serve: dashboard.stage ## Build+run the nginx image locally on $(PORT)
 	@command -v docker >/dev/null 2>&1 || { \
@@ -59,7 +60,9 @@ dashboard.refresh: ## Lean tail-sync (no wallets/tweets/depth/MEV) then publish 
 
 dashboard.schedule: ## Install launchd job (02:15 and 18:15 local) for dashboard.refresh
 	@mkdir -p "$(LAUNCH_AGENTS)"
-	@sed -e 's|__CCQUANT_ROOT__|$(CURDIR)|g' -e 's|__HOME__|$(HOME)|g' \
+	@sed -e 's|__CCQUANT_ROOT__|$(CURDIR)|g' \
+		-e 's|__HOME__|$(HOME)|g' \
+		-e 's|__LAUNCH_LABEL__|$(LAUNCH_LABEL)|g' \
 		deploy/com.ccquant.dashboard-refresh.plist.in > "$(LAUNCH_PLIST)"
 	@launchctl bootout "gui/$(LAUNCH_UID)/$(LAUNCH_LABEL)" >/dev/null 2>&1 || true
 	launchctl bootstrap "gui/$(LAUNCH_UID)" "$(LAUNCH_PLIST)"

@@ -15,9 +15,9 @@ renders it from local DuckDB. The live BTC tape refreshes **in the
 visitor's browser** against public Binance (then Coinbase) APIs — there is
 no server-side price proxy.
 
-Fly runs `nginx:1.27-alpine` from [`deploy/Dockerfile`](../deploy/Dockerfile)
-with [`deploy/nginx.conf`](../deploy/nginx.conf). The image copies
-`deploy/public/index.html` at **build** time. [`.dockerignore`](../.dockerignore)
+Fly runs `nginx:1.30.4-alpine` (current stable) from [`deploy/Dockerfile`](../deploy/Dockerfile)
+with [`deploy/nginx.conf`](../deploy/nginx.conf). The image copies `deploy/public/index.html` at **build** time (this
+path is a fixed contract — not overridable via Make). [`.dockerignore`](../.dockerignore)
 sends only `deploy/` to the builder (not `.venv`, `data/`, or `.env`).
 There is no DuckDB volume, no Python runtime, and **no API keys on Fly**.
 
